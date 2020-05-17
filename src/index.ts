@@ -35,7 +35,21 @@ const connectionOpened = (conn: Peer.DataConnection) => {
 };
 
 const callOpened = (call: Peer.MediaConnection) => {
-  call.on("stream", (stream) => {});
+  call.on("stream", (stream) => {
+    const id = call.peer;
+
+    if (document.getElementById(id)) {
+      return;
+    }
+
+    const el = document.createElement("video");
+    el.id = id;
+    el.srcObject = stream;
+    el.onloadedmetadata = (e) => {
+      el.play();
+    };
+    document.querySelector("#wrapper").appendChild(el);
+  });
 };
 
 window.addEventListener("DOMContentLoaded", () => {
@@ -50,6 +64,7 @@ window.addEventListener("DOMContentLoaded", () => {
   peer.on("call", async (call) => {
     const mediaStream = await getMediaStream();
     call.answer(mediaStream);
+    callOpened(call);
   });
 
   document.getElementById("connect").addEventListener("click", () => {
