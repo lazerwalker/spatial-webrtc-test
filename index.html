@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <meta http-equiv="Content-Type" content="text/html" charset="utf-8" />
+  <title>WebRTC Test</title>
+
+  <script src="./src/index.ts"></script>
+
+  <style>
+    #overlay {
+      position: absolute;
+      top: 0;
+      left: 0;
+    }
+
+    #wrapper {
+      position: relative;
+    }
+  </style>
+</head>
+<button id="connect">Data Connect!</button>
+<button id="call">Call!</button>
+<div id="wrapper">
+  <canvas id="overlay"></canvas>
+  <video id="webcam"></video>
+</div>
+
+<body></body>
+
+</html>
