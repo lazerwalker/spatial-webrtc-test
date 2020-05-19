@@ -1,8 +1,14 @@
 import Peer from "peerjs";
+import * as SignalR from "@aspnet/signalr";
 
 let peer: Peer;
+let mediaStream: MediaStream | undefined;
 
 const getMediaStream = async (): Promise<MediaStream | undefined> => {
+  if (mediaStream) {
+    return mediaStream;
+  }
+
   let stream = null;
 
   try {
@@ -19,6 +25,8 @@ const getMediaStream = async (): Promise<MediaStream | undefined> => {
   } catch (err) {
     /* handle the error */
   }
+
+  mediaStream = stream;
 
   return stream;
 };
@@ -52,12 +60,56 @@ const callOpened = (call: Peer.MediaConnection) => {
   });
 };
 
-window.addEventListener("DOMContentLoaded", () => {
-  peer = new Peer();
-  console.log("Loaded!");
+const connectToPeer = async (peerId: string) => {
+  const dataConn = peer.connect(peerId);
+  connectionOpened(dataConn);
+
+  const mediaStream = await getMediaStream();
+  const callConn = peer.call(peerId, mediaStream);
+  callOpened(callConn);
+};
+
+const connectSignalR = () => {
+  const connection = new SignalR.HubConnectionBuilder()
+    .withUrl(`https://spatial-webrtc-test.azurewebsites.net/api`)
+    .configureLogging(SignalR.LogLevel.Information)
+    .build();
+
+  connection.on("peerConnected", (peerId) => {
+    console.log("got a peer to connect to!", peerId);
+    if (peerId !== peer.id) {
+      connectToPeer(peerId);
+    } else {
+      console.log("That was ourself. Ignoring.");
+    }
+  });
+
+  connection.onclose(() => console.log("disconnected"));
+
+  console.log("connecting...");
+  connection
+    .start()
+    .then(() => console.log("Connected!"))
+    .catch(console.error);
+};
+
+const setUpPeer = (peer: Peer) => {
+  console.log("Peer loaded!");
   peer.on("open", (id) => {
     console.log("Peer opened");
     console.log(id);
+
+    fetch(`https://spatial-webrtc-test.azurewebsites.net/api/broadcastPeerId`, {
+      method: "POST",
+      credentials: "include",
+      body: JSON.stringify({ userId: id }),
+    }).then((r) => {
+      if (r.ok) {
+        console.log("Updated", r);
+      } else {
+        console.error("Update failed", r);
+      }
+    });
   });
 
   peer.on("connection", connectionOpened);
@@ -66,6 +118,12 @@ window.addEventListener("DOMContentLoaded", () => {
     call.answer(mediaStream);
     callOpened(call);
   });
+};
+window.addEventListener("DOMContentLoaded", () => {
+  connectSignalR();
+
+  peer = new Peer();
+  setUpPeer(peer);
 
   document.getElementById("connect").addEventListener("click", () => {
     const otherId = prompt("What's the peer ID?");

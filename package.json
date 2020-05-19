@@ -9,10 +9,11 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "parcel": "^1.12.4",
+    "@aspnet/signalr": "^1.1.4",
     "peerjs": "^1.2.0"
   },
   "devDependencies": {
+    "parcel": "^1.12.4",
     "typescript": "^3.9.2"
   }
 }
