@@ -70,8 +70,20 @@ const connectToPeer = async (peerId: string) => {
 };
 
 const connectSignalR = () => {
+  class CustomHttpClient extends SignalR.DefaultHttpClient {
+    public send(request: SignalR.HttpRequest): Promise<SignalR.HttpResponse> {
+      request.headers = {
+        ...request.headers,
+        "x-ms-client-principal-id": peer.id,
+      };
+      return super.send(request);
+    }
+  }
+
   const connection = new SignalR.HubConnectionBuilder()
-    .withUrl(`https://spatial-webrtc-test.azurewebsites.net/api`)
+    .withUrl(`https://spatial-webrtc-test.azurewebsites.net/api`, {
+      httpClient: new CustomHttpClient(console),
+    })
     .configureLogging(SignalR.LogLevel.Information)
     .build();
 
@@ -82,6 +94,10 @@ const connectSignalR = () => {
     } else {
       console.log("That was ourself. Ignoring.");
     }
+  });
+
+  connection.on("irrelevant", (data) => {
+    console.log("Irrelevant", data);
   });
 
   connection.onclose(() => console.log("disconnected"));
@@ -98,6 +114,8 @@ const setUpPeer = (peer: Peer) => {
   peer.on("open", (id) => {
     console.log("Peer opened");
     console.log(id);
+
+    connectSignalR();
 
     fetch(`https://spatial-webrtc-test.azurewebsites.net/api/broadcastPeerId`, {
       method: "POST",
@@ -120,8 +138,6 @@ const setUpPeer = (peer: Peer) => {
   });
 };
 window.addEventListener("DOMContentLoaded", () => {
-  connectSignalR();
-
   peer = new Peer();
   setUpPeer(peer);
 

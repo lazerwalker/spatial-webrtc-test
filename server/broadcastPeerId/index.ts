@@ -22,16 +22,24 @@ const httpTrigger: AzureFunction = async function (
 
   context.bindings.signalRGroupActions = {
     userId,
-    groupName: "peerConnected",
+    groupName: "peers",
     action: "add",
   };
 
   console.log("Setting messages");
 
-  context.bindings.signalRMessages = {
-    target: "peerConnected",
-    arguments: [userId],
-  };
+  context.bindings.signalRMessages = [
+    {
+      groupName: "peers",
+      target: "peerConnected",
+      arguments: [userId],
+    },
+    {
+      groupName: "someNonexistentGroup",
+      target: "irrelevant",
+      arguments: ["lol"],
+    },
+  ];
 };
 
 export default httpTrigger;
