@@ -1,6 +1,6 @@
 // Adapted from https://github.com/yemount/pose-animator/blob/90d5a58328f16d332c39d4b281298428ebb61e64/camera.js
-import * as posenet_module from "@tensorflow-models/posenet";
-import * as facemesh_module from "@tensorflow-models/facemesh";
+import * as posenet from "@tensorflow-models/posenet";
+import * as facemesh from "@tensorflow-models/facemesh";
 import * as tf from "@tensorflow/tfjs";
 import paper from "paper";
 
@@ -9,81 +9,80 @@ import { PoseIllustration } from "./illustrationGen/illustration";
 import { Skeleton } from "./illustrationGen/skeleton";
 import { SVGUtils } from "./poseNetUtils/svgUtils";
 
-// Camera stream video element
-let videoWidth = 300;
-let videoHeight = 300;
-
-// Canvas
-let faceDetection = null;
-let illustration = null;
-let canvasWidth = 800;
-let canvasHeight = 800;
+interface SkeletonData {
+  pose?: posenet.Pose;
+  face?: facemesh.AnnotatedPrediction;
+}
 
 // ML models
-let facemesh;
-let posenet;
+let facemeshNet: facemesh.FaceMesh;
+let posenetNet: posenet.PoseNet;
 
-let inputVideo: HTMLVideoElement;
+const getSkeleton = async (input: HTMLVideoElement): Promise<SkeletonData> => {
+  const tensor = tf.browser.fromPixels(input);
+  const face = await facemeshNet.estimateFaces(tensor, false, false);
+  const poses = await posenetNet.estimatePoses(input, {
+    flipHorizontal: true,
+    decodingMethod: "multi-person",
+    maxDetections: 1,
+    scoreThreshold: 0.15,
+    nmsRadius: 30.0,
+  });
 
-/**
- * Feeds an image to posenet to estimate poses - this is where the magic
- * happens. This function loops with a requestAnimationFrame method.
- */
-export function detectPoseInRealTime() {
+  tensor.dispose();
+
+  return {
+    pose: poses[0],
+    face: face[0],
+  };
+};
+
+const drawSkeleton = (
+  skeleton: SkeletonData,
+  illustration: PoseIllustration
+) => {
+  paper.project.clear();
+
+  if (!skeleton.pose) {
+    return;
+  }
+
+  Skeleton.flipPose(skeleton.pose);
+
+  if (skeleton.face) {
+    let face = Skeleton.toFaceFrame(skeleton.face);
+    illustration.updateSkeleton(skeleton.pose, face);
+  } else {
+    illustration.updateSkeleton(skeleton.pose, null);
+  }
+  illustration.draw();
+};
+
+const detectAndDrawPose = (
+  inputVideo: HTMLVideoElement,
+  illustration: PoseIllustration
+) => {
   async function poseDetectionFrame() {
-    let poses = [];
-
-    // Creates a tensor from an image
-    const input = tf.browser.fromPixels(inputVideo);
-    faceDetection = await facemesh.estimateFaces(input, false, false);
-    let all_poses = await posenet.estimatePoses(inputVideo, {
-      flipHorizontal: true,
-      decodingMethod: "multi-person",
-      maxDetections: 1,
-      scoreThreshold: 0.15,
-      nmsRadius: 30.0,
-    });
-
-    poses = poses.concat(all_poses);
-    input.dispose();
-
-    paper.project.clear();
-
-    if (poses.length >= 1 && illustration) {
-      Skeleton.flipPose(poses[0]);
-
-      if (faceDetection && faceDetection.length > 0) {
-        let face = Skeleton.toFaceFrame(faceDetection[0]);
-        illustration.updateSkeleton(poses[0], face);
-      } else {
-        illustration.updateSkeleton(poses[0], null);
-      }
-      illustration.draw(paper, 0, 0);
-    }
-
-    // paper.project.activeLayer.scale(
-    //   canvasWidth / videoWidth,
-    //   canvasHeight / videoHeight,
-    //   new paper.Point(0, 0)
-    // );
-
+    const skeleton = await getSkeleton(inputVideo);
+    drawSkeleton(skeleton, illustration);
     requestAnimationFrame(poseDetectionFrame);
   }
 
   poseDetectionFrame();
-}
+};
 
 function setupCanvas(output: HTMLCanvasElement) {
+  let canvasWidth = 800;
+  let canvasHeight = 800;
+
   if (isMobile()) {
     canvasWidth = Math.min(window.innerWidth, window.innerHeight);
     canvasHeight = canvasWidth;
-    videoWidth *= 0.7;
-    videoHeight *= 0.7;
   }
 
   output.width = canvasWidth;
   output.height = canvasHeight;
-  console.log(output.width, output.height);
+
   paper.setup(output);
 }
 
@@ -101,11 +100,12 @@ const setVideoHeight = async (el: HTMLVideoElement): Promise<number> => {
   }
 };
 
-async function parseSVG(target) {
+async function parseSVG(target): Promise<PoseIllustration> {
   const scope = await SVGUtils.importSVG(`./svgs/${target}.svg`);
   let skeleton = new Skeleton(scope);
-  illustration = new PoseIllustration(paper);
+  const illustration = new PoseIllustration(paper);
   illustration.bindSkeleton(skeleton, scope);
+  return illustration;
 }
 
 /**
@@ -116,12 +116,12 @@ export async function setUpPosenet(
   input: HTMLVideoElement,
   output: HTMLCanvasElement
 ) {
-  inputVideo = input;
+  const inputVideo = input;
 
   setupCanvas(output);
 
   console.log("Loading PoseNet model...");
-  posenet = await posenet_module.load({
+  posenetNet = await posenet.load({
     architecture: "MobileNetV1",
     outputStride: 16,
     inputResolution: 257,
@@ -129,10 +129,10 @@ export async function setUpPosenet(
     quantBytes: 2,
   });
   console.log("Loading FaceMesh model...");
-  facemesh = await facemesh_module.load();
+  facemeshNet = await facemesh.load();
 
-  await parseSVG("girl");
+  const illustration = await parseSVG("girl");
   await setVideoHeight(inputVideo);
 
-  detectPoseInRealTime();
+  detectAndDrawPose(inputVideo, illustration);
 }
