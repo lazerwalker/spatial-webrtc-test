@@ -36,10 +36,12 @@ export function detectPoseInRealTime() {
     // Creates a tensor from an image
     const input = tf.browser.fromPixels(inputVideo);
     faceDetection = await facemesh.estimateFaces(input, false, false);
-    let all_poses = await posenet.estimateSinglePose(inputVideo, {
-      //   flipHorizontal: true,
-      //   scoreThreshold: minPartConfidence,
-      //   nmsRadius: nmsRadius,
+    let all_poses = await posenet.estimatePoses(inputVideo, {
+      flipHorizontal: true,
+      decodingMethod: "multi-person",
+      maxDetections: 1,
+      scoreThreshold: 0.15,
+      nmsRadius: 30.0,
     });
 
     poses = poses.concat(all_poses);
