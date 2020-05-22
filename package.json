@@ -4,13 +4,17 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "dev": "parcel index.html",
+    "dev": "parcel index.html --no-source-maps",
     "build": "parcel build index.html"
   },
   "author": "",
   "license": "ISC",
   "dependencies": {
     "@aspnet/signalr": "^1.1.4",
+    "@tensorflow-models/facemesh": "0.0.3",
+    "@tensorflow-models/posenet": "^2.2.1",
+    "@tensorflow/tfjs": "^1.7.4",
+    "paper": "^0.12.4",
     "peerjs": "^1.2.0"
   },
   "devDependencies": {

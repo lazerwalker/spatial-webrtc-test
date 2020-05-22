@@ -1,10 +1,12 @@
 import Peer from "peerjs";
 import * as SignalR from "@aspnet/signalr";
+import { setUpPosenet } from "./posenet";
 
 let peer: Peer;
 let mediaStream: MediaStream | undefined;
 
 const getMediaStream = async (): Promise<MediaStream | undefined> => {
+  console.log("Getting media stream");
   if (mediaStream) {
     return mediaStream;
   }
@@ -13,7 +15,7 @@ const getMediaStream = async (): Promise<MediaStream | undefined> => {
 
   try {
     stream = await navigator.mediaDevices.getUserMedia({
-      audio: true,
+      audio: false,
       video: { facingMode: "user" },
     });
 
@@ -21,8 +23,11 @@ const getMediaStream = async (): Promise<MediaStream | undefined> => {
     video.srcObject = stream;
     video.onloadedmetadata = (e) => {
       video.play();
+
+      setUpPosenet(video, document.querySelector("#illustration"));
     };
   } catch (err) {
+    console.log("Video error", err);
     /* handle the error */
   }
 
@@ -138,6 +143,7 @@ const setUpPeer = (peer: Peer) => {
   });
 };
 window.addEventListener("DOMContentLoaded", () => {
+  getMediaStream();
   peer = new Peer();
   setUpPeer(peer);
 
