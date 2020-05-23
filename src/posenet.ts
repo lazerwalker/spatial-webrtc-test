@@ -14,6 +14,8 @@ interface SkeletonData {
   face?: facemesh.AnnotatedPrediction;
 }
 
+type SkeletonDataHandler = (skeleton: SkeletonData) => void;
+
 // ML models
 let facemeshNet: facemesh.FaceMesh;
 let posenetNet: posenet.PoseNet;
@@ -37,10 +39,10 @@ const getSkeleton = async (input: HTMLVideoElement): Promise<SkeletonData> => {
   };
 };
 
-const drawSkeleton = (
+export function drawSkeleton(
   skeleton: SkeletonData,
   illustration: PoseIllustration
-) => {
+) {
   paper.project.clear();
 
   if (!skeleton.pose) {
@@ -56,14 +58,19 @@ const drawSkeleton = (
     illustration.updateSkeleton(skeleton.pose, null);
   }
   illustration.draw();
-};
+}
 
 const detectAndDrawPose = (
   inputVideo: HTMLVideoElement,
-  illustration: PoseIllustration
+  illustration: PoseIllustration,
+  onSkeletonUpdate?: SkeletonDataHandler
 ) => {
   async function poseDetectionFrame() {
     const skeleton = await getSkeleton(inputVideo);
+    if (onSkeletonUpdate) {
+      onSkeletonUpdate(skeleton);
+    }
+
     drawSkeleton(skeleton, illustration);
     requestAnimationFrame(poseDetectionFrame);
   }
@@ -100,7 +107,7 @@ const setVideoHeight = async (el: HTMLVideoElement): Promise<number> => {
   }
 };
 
-async function parseSVG(target): Promise<PoseIllustration> {
+export async function parseSVG(target): Promise<PoseIllustration> {
   const scope = await SVGUtils.importSVG(`./svgs/${target}.svg`);
   let skeleton = new Skeleton(scope);
   const illustration = new PoseIllustration(paper);
@@ -112,10 +119,15 @@ async function parseSVG(target): Promise<PoseIllustration> {
  * Kicks off the demo by loading the posenet model, finding and loading
  * available camera devices, and setting off the detectPoseInRealTime function.
  */
-export async function setUpPosenet(
-  input: HTMLVideoElement,
-  output: HTMLCanvasElement
-) {
+export async function setUpPosenet({
+  input,
+  output,
+  onSkeletonUpdate,
+}: {
+  input: HTMLVideoElement;
+  output: HTMLCanvasElement;
+  onSkeletonUpdate?: SkeletonDataHandler;
+}) {
   const inputVideo = input;
 
   setupCanvas(output);
@@ -134,5 +146,5 @@ export async function setUpPosenet(
   const illustration = await parseSVG("girl");
   await setVideoHeight(inputVideo);
 
-  detectAndDrawPose(inputVideo, illustration);
+  detectAndDrawPose(inputVideo, illustration, onSkeletonUpdate);
 }

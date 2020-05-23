@@ -1,9 +1,13 @@
 import Peer from "peerjs";
 import * as SignalR from "@aspnet/signalr";
-import { setUpPosenet } from "./posenet";
+import { drawSkeleton, setUpPosenet, parseSVG } from "./posenet";
+import { PoseIllustration } from "./illustrationGen/illustration";
 
 let peer: Peer;
 let mediaStream: MediaStream | undefined;
+
+let dataConnections: Peer.DataConnection[] = [];
+let peerCanvases: { [peerId: string]: PoseIllustration } = {};
 
 const getMediaStream = async (): Promise<MediaStream | undefined> => {
   console.log("Getting media stream");
@@ -24,7 +28,14 @@ const getMediaStream = async (): Promise<MediaStream | undefined> => {
     video.onloadedmetadata = (e) => {
       video.play();
 
-      setUpPosenet(video, document.querySelector("#illustration"));
+      setUpPosenet({
+        input: video,
+        output: document.querySelector("#illustration"),
+        onSkeletonUpdate: (skeleton) => {
+          const json = JSON.stringify(skeleton);
+          dataConnections.forEach((c) => c.send(json));
+        },
+      });
     };
   } catch (err) {
     console.log("Video error", err);
@@ -37,13 +48,18 @@ const getMediaStream = async (): Promise<MediaStream | undefined> => {
 };
 
 const connectionOpened = (conn: Peer.DataConnection) => {
-  conn.on("open", () => {
+  dataConnections.push(conn);
+
+  conn.on("open", async () => {
     console.log(`connected to ${conn.peer}`);
-    conn.send("Hello!");
+    const illustration = await parseSVG("boy");
+    peerCanvases[conn.peer] = illustration;
   });
 
   conn.on("data", (data) => {
-    console.log("Reeived data", data);
+    const skeleton = JSON.parse(data);
+    console.log("Reeived data", skeleton);
+    drawSkeleton(skeleton, peerCanvases[conn.peer]);
   });
 };
 
@@ -69,9 +85,9 @@ const connectToPeer = async (peerId: string) => {
   const dataConn = peer.connect(peerId);
   connectionOpened(dataConn);
 
-  const mediaStream = await getMediaStream();
-  const callConn = peer.call(peerId, mediaStream);
-  callOpened(callConn);
+  // const mediaStream = await getMediaStream();
+  // const callConn = peer.call(peerId, mediaStream);
+  // callOpened(callConn);
 };
 
 const connectSignalR = () => {
