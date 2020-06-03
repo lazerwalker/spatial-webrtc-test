@@ -55,7 +55,7 @@ export function drawSkeleton(
     let face = Skeleton.toFaceFrame(skeleton.face);
     illustration.updateSkeleton(skeleton.pose, face);
   } else {
-    illustration.updateSkeleton(skeleton.pose, null);
+    console.log("WARNING: No face detected");
   }
   illustration.draw();
 }
@@ -107,11 +107,10 @@ const setVideoHeight = async (el: HTMLVideoElement): Promise<number> => {
   }
 };
 
-export async function parseSVG(target): Promise<PoseIllustration> {
+export async function parseSVG(target: string): Promise<PoseIllustration> {
   const scope = await SVGUtils.importSVG(`./svgs/${target}.svg`);
   let skeleton = new Skeleton(scope);
-  const illustration = new PoseIllustration(paper);
-  illustration.bindSkeleton(skeleton, scope);
+  const illustration = new PoseIllustration(skeleton, scope, paper);
   return illustration;
 }
 

@@ -15,51 +15,17 @@
  * =============================================================================
  */
 
-import { MathUtils } from "./mathUtils";
 import paper from "paper";
 
-export class Palette {
-  constructor(colors) {
-    let scope = paper;
-    this.colors = colors.map((c) => ({
-      light: new scope.Color(c[0]).convert("hsb"),
-      dark: new scope.Color(c[1]).convert("hsb"),
-    }));
-  }
-
-  select(variance) {
-    let scope = paper;
-    let pair = this.colors[Math.floor(Math.random() * this.colors.length)];
-    let varColor = (c) =>
-      new scope.Color({
-        hue: c.hue + 360 * MathUtils.gaussian(0, variance),
-        saturation: c.saturation + MathUtils.gaussian(0, variance),
-        brightness: c.brightness + MathUtils.gaussian(0, variance),
-      });
-    return {
-      light: varColor(pair.light),
-      dark: varColor(pair.dark),
-    };
-  }
-}
-
 export class ColorUtils {
-  static addRGB(color, red, green, blue) {
+  static addRGB(color: paper.Color, red: number, green: number, blue: number) {
     color.red = color.red + red;
     color.green = color.green + green;
     color.blue = color.blue + blue;
   }
 
-  static lerp(color0, color1, amt) {
-    return new paper.Color(
-      MathUtils.lerp(color0.red, color1.red, amt),
-      MathUtils.lerp(color0.green, color1.green, amt),
-      MathUtils.lerp(color0.blue, color1.blue, amt)
-    );
-  }
-
   // Generates random color from string hash.
-  static fromStringHash(str) {
+  static fromStringHash(str: string): paper.Color {
     // Compute hash from string
     // Source http://werxltd.com/wp/2010/05/13/javascript-implementation-of-javas-string-hashcode-method/
     var hash = 0,

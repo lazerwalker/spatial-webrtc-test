@@ -15,24 +15,100 @@
  * =============================================================================
  */
 
-import { Bone, allPartNames, Skeleton } from "./skeleton";
+import {
+  Bone,
+  allPartNames,
+  Skeleton,
+  FaceFrame,
+  BonePoint,
+  PointTransform,
+} from "./skeleton";
 import { MathUtils } from "../poseNetUtils/mathUtils";
 import { SVGUtils } from "../poseNetUtils/svgUtils";
 import { ColorUtils } from "../poseNetUtils/colorUtils";
-
-const allPartNamesMap = {};
-allPartNames.forEach((name) => (allPartNamesMap[name] = 1));
+import { Pose } from "@tensorflow-models/posenet";
+import { AnnotatedPrediction } from "@tensorflow-models/facemesh";
 
 const MIN_CONFIDENCE_PATH_SCORE = 0.3;
 
+interface SkinnedPath {
+  closed: Boolean;
+  confidenceScore?: number;
+  fillColor: paper.Color | null;
+  segments: Segment[];
+  strokeColor: paper.Color | null;
+  strokeWidth: number;
+}
+
+type Weights = { [boneName: string]: Weight };
+interface Weight {
+  bone: Bone;
+  value: number;
+}
+
+interface BoneSkin {
+  bone: Bone;
+  weight: number;
+  transform: PointTransform;
+}
+
+export interface Skinning {
+  skinning: {
+    [boneName: string]: BoneSkin;
+  };
+  position: paper.Point;
+  currentPosition: paper.Point;
+}
+
+interface Segment {
+  point: Skinning;
+  handleIn: Skinning;
+  handleOut: Skinning;
+}
+
 // Represents a skinned illustration.
 export class PoseIllustration {
-  constructor(scope) {
+  skeleton: Skeleton;
+  scope: paper.PaperScope;
+  frames: any[];
+
+  pose?: Pose;
+  face?: FaceFrame;
+
+  skinnedPaths: SkinnedPath[];
+
+  constructor(
+    skeleton: Skeleton,
+    skeletonScope: paper.PaperScope,
+    scope: paper.PaperScope
+  ) {
     this.scope = scope;
     this.frames = [];
+
+    let items = skeletonScope.project.getItems({ recursive: true });
+    items = items.filter(
+      (item) =>
+        item.parent &&
+        item.parent.name &&
+        item.parent.name.startsWith("illustration")
+    );
+    this.skeleton = skeleton;
+    this.skinnedPaths = [];
+
+    // Only support rendering path and shapes for now.
+    for (let i = 0; i < items.length; i++) {
+      let item = items[i];
+      if (SVGUtils.isGroup(item)) {
+        this.bindGroup(item as paper.Group, skeleton);
+      } else if (SVGUtils.isPath(item)) {
+        this.bindPathToBones(item as paper.Path);
+      } else if (SVGUtils.isShape(item)) {
+        this.bindPathToBones((item as paper.Shape).toPath());
+      }
+    }
   }
 
-  updateSkeleton(pose, face) {
+  updateSkeleton(pose: Pose, face: FaceFrame) {
     this.pose = pose;
     this.face = face;
     this.skeleton.update(pose, face);
@@ -40,16 +116,16 @@ export class PoseIllustration {
       return;
     }
 
-    let getConfidenceScore = (p) => {
+    let getConfidenceScore = (p: Skinning): number => {
       return Object.keys(p.skinning).reduce((totalScore, boneName) => {
         let bt = p.skinning[boneName];
-        return totalScore + bt.bone.score * bt.weight;
+        return totalScore + (bt.bone.score || 0) * bt.weight;
       }, 0);
     };
 
     this.skinnedPaths.forEach((skinnedPath) => {
       let confidenceScore = 0;
-      skinnedPath.segments.forEach((seg) => {
+      skinnedPath.segments.forEach((seg: Segment) => {
         // Compute confidence score.
         confidenceScore += getConfidenceScore(seg.point);
         // Compute new positions for curve point and handles.
@@ -91,7 +167,7 @@ export class PoseIllustration {
         closed: skinnedPath.closed,
       });
       skinnedPath.segments.forEach((seg) => {
-        path.addSegment(
+        (path as any).addSegment(
           seg.point.currentPosition,
           seg.handleIn
             ? seg.handleIn.currentPosition.subtract(seg.point.currentPosition)
@@ -109,10 +185,17 @@ export class PoseIllustration {
   }
 
   debugDraw() {
+    interface DrawOpts {
+      strokeColor?: string | paper.Color;
+      strokeWidth?: number;
+      radius?: number;
+      fillColor?: string | paper.Color;
+    }
+
     let scope = this.scope;
     let group = new scope.Group();
     scope.project.activeLayer.addChild(group);
-    let drawCircle = (p, opt = {}) => {
+    let drawCircle = (p: paper.Point, opt: DrawOpts = {}) => {
       group.addChild(
         new scope.Path.Circle({
           center: [p.x, p.y],
@@ -121,7 +204,7 @@ export class PoseIllustration {
         })
       );
     };
-    let drawLine = (p0, p1, opt = {}) => {
+    let drawLine = (p0: paper.Point, p1: paper.Point, opt: DrawOpts = {}) => {
       group.addChild(
         new scope.Path({
           segments: [p0, p1],
@@ -159,47 +242,25 @@ export class PoseIllustration {
         drawLine(seg.point.currentPosition, seg.handleIn.currentPosition, {
           strokeColor: color,
         });
-        drawCircle(
-          seg.handleOut.currentPosition,
-          { fillColor: color },
-          { strokeColor: color }
-        );
+        drawCircle(seg.handleOut.currentPosition, {
+          fillColor: color,
+          strokeColor: color,
+        });
         drawLine(seg.point.currentPosition, seg.handleOut.currentPosition);
       });
     });
   }
 
-  debugDrawLabel(scope) {
+  debugDrawLabel(scope: paper.PaperScope) {
     this.skeleton.debugDrawLabels(scope);
   }
 
-  bindSkeleton(skeleton, skeletonScope) {
-    let items = skeletonScope.project.getItems({ recursive: true });
-    items = items.filter(
-      (item) =>
-        item.parent &&
-        item.parent.name &&
-        item.parent.name.startsWith("illustration")
-    );
-    this.skeleton = skeleton;
-    this.skinnedPaths = [];
+  bindGroup(group: paper.Group, skeleton: Skeleton) {
+    let paths: paper.Path[] = [];
+    let keypoints: {
+      [partName: string]: BonePoint;
+    } = {};
 
-    // Only support rendering path and shapes for now.
-    for (let i = 0; i < items.length; i++) {
-      let item = items[i];
-      if (SVGUtils.isGroup(item)) {
-        this.bindGroup(item, skeleton);
-      } else if (SVGUtils.isPath(item)) {
-        this.bindPathToBones(item);
-      } else if (SVGUtils.isShape(item)) {
-        this.bindPathToBones(item.toPath());
-      }
-    }
-  }
-
-  bindGroup(group, skeleton) {
-    let paths = [];
-    let keypoints = {};
     let items = group.getItems({ recursive: true });
     // Find all paths and included keypoints.
     items.forEach((item) => {
@@ -210,14 +271,16 @@ export class PoseIllustration {
         keypoints[partName] = {
           position: item.bounds.center,
           name: partName,
+          currentPosition: item.bounds.center,
+          transformFunc: () => {},
         };
       } else if (SVGUtils.isPath(item)) {
-        paths.push(item);
+        paths.push(item as paper.Path);
       } else if (SVGUtils.isShape(item)) {
-        paths.push(item.toPath());
+        paths.push((item as paper.Shape).toPath());
       }
     });
-    let secondaryBones = [];
+    let secondaryBones: Bone[] = [];
     // Find all parent bones of the included keypoints.
     let parentBones = skeleton.bones.filter(
       (bone) => keypoints[bone.kp0.name] && keypoints[bone.kp1.name]
@@ -231,7 +294,7 @@ export class PoseIllustration {
     parentBones.forEach((parentBone) => {
       let kp0 = keypoints[parentBone.kp0.name];
       let kp1 = keypoints[parentBone.kp1.name];
-      let secondaryBone = new Bone().set(
+      let secondaryBone = new Bone(
         kp0,
         kp1,
         parentBone.skeleton,
@@ -258,9 +321,10 @@ export class PoseIllustration {
 
   // Assign weights from bones for point.
   // Weight calculation is roughly based on linear blend skinning model.
-  getWeights(point, bones) {
+  getWeights(point: paper.Point, bones: Bone[]): Weights {
     let totalW = 0;
-    let weights = {};
+    let weights: { [name: string]: Weight } = {};
+
     bones.forEach((bone) => {
       let d = MathUtils.getClosestPointOnSegment(
         bone.kp0.position,
@@ -299,35 +363,37 @@ export class PoseIllustration {
 
   // Binds a path to bones by compute weight contribution from each bones for each path segment.
   // If selectedBones are set, bind directly to the selected bones. Otherwise auto select the bone group closest to each segment.
-  bindPathToBones(path, selectedBones) {
+  bindPathToBones(path: paper.Path, selectedBones?: Bone[]) {
     // Compute bone weights for each segment.
-    let segs = path.segments.map((s) => {
-      // Check if control points are collinear.
-      // If so, use the middle point's weight for all three points (curve point, handleIn, handleOut).
-      // This makes sure smooth curves remain smooth after deformation.
-      let collinear = MathUtils.isCollinear(s.handleIn, s.handleOut);
-      let bones = selectedBones || this.skeleton.findBoneGroup(s.point);
-      let weightsP = this.getWeights(s.point, bones);
-      let segment = {
-        point: this.getSkinning(s.point, weightsP),
-      };
-      // For handles, compute transformation in world space.
-      if (s.handleIn) {
-        let pHandleIn = s.handleIn.add(s.point);
-        segment.handleIn = this.getSkinning(
-          pHandleIn,
-          collinear ? weightsP : this.getWeights(pHandleIn, bones)
-        );
+    let segs = path.segments.map(
+      (s): Segment => {
+        // Check if control points are collinear.
+        // If so, use the middle point's weight for all three points (curve point, handleIn, handleOut).
+        // This makes sure smooth curves remain smooth after deformation.
+        let collinear = MathUtils.isCollinear(s.handleIn, s.handleOut);
+        let bones = selectedBones || this.skeleton.findBoneGroup(s.point);
+        let weightsP = this.getWeights(s.point, bones);
+        let segment: any = {
+          point: this.getSkinning(s.point, weightsP),
+        };
+        // For handles, compute transformation in world space.
+        if (s.handleIn) {
+          let pHandleIn = s.handleIn.add(s.point);
+          segment.handleIn = this.getSkinning(
+            pHandleIn,
+            collinear ? weightsP : this.getWeights(pHandleIn, bones)
+          );
+        }
+        if (s.handleOut) {
+          let pHandleOut = s.handleOut.add(s.point);
+          segment.handleOut = this.getSkinning(
+            pHandleOut,
+            collinear ? weightsP : this.getWeights(pHandleOut, bones)
+          );
+        }
+        return segment;
       }
-      if (s.handleOut) {
-        let pHandleOut = s.handleOut.add(s.point);
-        segment.handleOut = this.getSkinning(
-          pHandleOut,
-          collinear ? weightsP : this.getWeights(pHandleOut, bones)
-        );
-      }
-      return segment;
-    });
+    );
     this.skinnedPaths.push({
       segments: segs,
       fillColor: path.fillColor,
@@ -337,8 +403,8 @@ export class PoseIllustration {
     });
   }
 
-  getSkinning(point, weights) {
-    let skinning = {};
+  getSkinning(point: paper.Point, weights: Weights) {
+    let skinning: { [boneName: string]: BoneSkin } = {};
     Object.keys(weights).forEach((boneName) => {
       skinning[boneName] = {
         bone: weights[boneName].bone,

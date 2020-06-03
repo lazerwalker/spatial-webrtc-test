@@ -19,6 +19,24 @@ import paper from "paper";
 import { SVGUtils } from "../poseNetUtils/svgUtils";
 import { MathUtils } from "../poseNetUtils/mathUtils";
 import { ColorUtils } from "../poseNetUtils/colorUtils";
+import { Pose } from "@tensorflow-models/posenet";
+import { AnnotatedPrediction } from "@tensorflow-models/facemesh";
+import { PoseIllustration, Skinning } from "./illustration";
+
+export interface PointTransform {
+  transform: paper.Point;
+  anchorPerc: number; // Is this a percentage?
+}
+
+interface Part {
+  position: paper.Point;
+  score: number;
+}
+
+export interface FaceFrame {
+  positions: number[];
+  faceInViewConfidence: number;
+}
 
 const MIN_POSE_SCORE = 0.1;
 const MIN_FACE_SCORE = 0.8;
@@ -41,7 +59,7 @@ const posePartNames = [
 ];
 
 // Mapping between face part names and their vertex indices in TF face mesh.
-export const facePartName2Index = {
+export const facePartName2Index: { [name: string]: number } = {
   topMid: 10,
   rightTop0: 67,
   rightTop1: 54,
@@ -195,9 +213,37 @@ const facePartNames = [
 
 export const allPartNames = posePartNames.concat(facePartNames);
 
+export interface BonePoint {
+  baseTransFunc?: Function;
+  currentPosition: paper.Point;
+  name: string;
+  position: paper.Point;
+  transformFunc: Function;
+}
+
 // Represents a bone formed by two part keypoints.
 export class Bone {
-  set(kp0, kp1, skeleton, type) {
+  kp0: BonePoint;
+  kp1: BonePoint;
+  boneColor: paper.Color;
+  name: string;
+  type: string;
+  skeleton: Skeleton;
+
+  score?: number;
+  latestCenter?: paper.Point;
+
+  parent?: Bone;
+
+  constructor(
+    kp0: BonePoint | null,
+    kp1: BonePoint | null,
+    skeleton: Skeleton,
+    type: string
+  ) {
+    if (!kp0 || !kp1)
+      throw `Missing a bone point when constructing a bone of type ${type}`;
+
     this.name = `${kp0.name}-${kp1.name}`;
     this.kp0 = kp0;
     this.kp1 = kp1;
@@ -211,7 +257,7 @@ export class Bone {
   // Finds a point's bone transform.
   // Let anchor be the closest point on the bone to the point.
   // A point's bone transformation is the transformation from anchor to the point.
-  getPointTransform(p) {
+  getPointTransform(p: paper.Point): PointTransform {
     let dir = this.kp1.position.subtract(this.kp0.position).normalize();
     let n = dir.clone();
     n.angle += 90;
@@ -232,7 +278,7 @@ export class Bone {
   }
 
   // Finds a point's current position from the current bone position.
-  transform(trans) {
+  transform(transform: PointTransform) {
     if (!this.kp1.currentPosition || !this.kp0.currentPosition) {
       return;
     }
@@ -242,52 +288,88 @@ export class Bone {
       this.type === "face"
         ? this.skeleton.currentFaceScale
         : this.skeleton.currentBodyScale;
+    if (scale === undefined) {
+      scale = 1;
+    }
+
     let dir = this.kp1.currentPosition
       .subtract(this.kp0.currentPosition)
       .normalize();
     let n = dir.clone();
     n.angle += 90;
     let anchor = this.kp0.currentPosition
-      .multiply(1 - trans.anchorPerc)
-      .add(this.kp1.currentPosition.multiply(trans.anchorPerc));
+      .multiply(1 - transform.anchorPerc)
+      .add(this.kp1.currentPosition.multiply(transform.anchorPerc));
     let p = anchor
-      .add(dir.multiply(trans.transform.x * scale))
-      .add(n.multiply(trans.transform.y * scale));
+      .add(dir.multiply(transform.transform.x * scale))
+      .add(n.multiply(transform.transform.y * scale));
     return p;
   }
 }
 
-function getKeyPointFromSVG(group, partName) {
+function getKeyPointFromSVG(
+  group: paper.Item,
+  partName: string
+): BonePoint | null {
   let shape = SVGUtils.findFirstItemWithPrefix(group, partName);
+  if (!shape) return null;
   return {
     position: shape.bounds.center,
+    currentPosition: shape.bounds.center,
     name: partName,
+    transformFunc: () => {},
   };
 }
 
-function getPartFromPose(pose, name) {
+function getPartFromPose(pose: Pose, name: string): Part | null {
   if (!pose || !pose.keypoints) {
     return null;
   }
   let part = pose.keypoints.find((kp) => kp.part === name);
+  if (!part) {
+    console.log("getPartFromPose could not find par");
+    return null;
+  }
   return {
     position: new paper.Point(part.position.x, part.position.y),
     score: part.score,
   };
 }
 
-function getKeypointFromFaceFrame(face, i) {
-  if (!face || !face.scaledMesh || !face.scaledMesh.length);
+function getKeypointFromFaceFrame(face: FaceFrame, i: number) {
   return new paper.Point(face.positions[i * 2], face.positions[i * 2 + 1]);
 }
 
 // Represents a full body skeleton.
 export class Skeleton {
-  constructor(scope) {
+  bones: Bone[];
+  isValid: Boolean = false;
+
+  currentFaceScale?: number;
+  currentBodyScale?: number;
+
+  boneGroups: { [name: string]: Bone[] };
+  parts: { [name: string]: Part } = {};
+
+  faceBones: Bone[] = [];
+  secondaryBones: Bone[] = [];
+  bodyBones: Bone[] = [];
+  bodyLen0: number;
+  faceLen0: number;
+
+  bNose3Nose4: Bone;
+  leftEarP2FFunc: any;
+  rightEarP2FFunc: any;
+
+  constructor(scope: paper.PaperScope) {
     let skeletonGroup = SVGUtils.findFirstItemWithPrefix(
       scope.project,
       "skeleton"
     );
+
+    if (!skeletonGroup)
+      throw "Skeleton not found! Double-check your SVG has a group called 'skeleton'";
+
     // Pose
     let leftAnkle = getKeyPointFromSVG(skeletonGroup, "leftAnkle");
     let leftKnee = getKeyPointFromSVG(skeletonGroup, "leftKnee");
@@ -418,347 +500,212 @@ export class Skeleton {
       "lowerLipBottomMid"
     );
 
-    this.bLeftShoulderRightShoulder = new Bone().set(
+    let bLeftShoulderRightShoulder = new Bone(
       leftShoulder,
       rightShoulder,
       this,
       "body"
     );
-    this.bRightShoulderRightHip = new Bone().set(
+    let bRightShoulderRightHip = new Bone(
       rightShoulder,
       rightHip,
       this,
       "body"
     );
-    this.bLeftHipRightHip = new Bone().set(leftHip, rightHip, this, "body");
-    this.bLeftShoulderLeftHip = new Bone().set(
-      leftShoulder,
-      leftHip,
-      this,
-      "body"
-    );
-    this.bLeftShoulderLeftElbow = new Bone().set(
+    let bLeftHipRightHip = new Bone(leftHip, rightHip, this, "body");
+    let bLeftShoulderLeftHip = new Bone(leftShoulder, leftHip, this, "body");
+    let bLeftShoulderLeftElbow = new Bone(
       leftShoulder,
       leftElbow,
       this,
       "body"
     );
-    this.bLeftElbowLeftWrist = new Bone().set(
-      leftElbow,
-      leftWrist,
-      this,
-      "body"
-    );
-    this.bRightShoulderRightElbow = new Bone().set(
+    let bLeftElbowLeftWrist = new Bone(leftElbow, leftWrist, this, "body");
+    let bRightShoulderRightElbow = new Bone(
       rightShoulder,
       rightElbow,
       this,
       "body"
     );
-    this.bRightElbowRightWrist = new Bone().set(
-      rightElbow,
-      rightWrist,
-      this,
-      "body"
-    );
-    this.bLeftHipLeftKnee = new Bone().set(leftHip, leftKnee, this, "body");
-    this.bLeftKneeLeftAnkle = new Bone().set(leftKnee, leftAnkle, this, "body");
-    this.bRightHipRightKnee = new Bone().set(rightHip, rightKnee, this, "body");
-    this.bRightKneeRightAnkle = new Bone().set(
-      rightKnee,
-      rightAnkle,
-      this,
-      "body"
-    );
+    let bRightElbowRightWrist = new Bone(rightElbow, rightWrist, this, "body");
+    let bLeftHipLeftKnee = new Bone(leftHip, leftKnee, this, "body");
+    let bLeftKneeLeftAnkle = new Bone(leftKnee, leftAnkle, this, "body");
+    let bRightHipRightKnee = new Bone(rightHip, rightKnee, this, "body");
+    let bRightKneeRightAnkle = new Bone(rightKnee, rightAnkle, this, "body");
 
-    this.bTopMidRightTop0 = new Bone().set(topMid, rightTop0, this, "face");
-    this.bTopMidLeftTop0 = new Bone().set(topMid, leftTop0, this, "face");
-    this.bLeftTop0LeftTop1 = new Bone().set(leftTop0, leftTop1, this, "face");
-    this.bLeftTop1LeftJaw2 = new Bone().set(leftTop1, leftJaw2, this, "face");
-    this.bLeftJaw2LeftJaw3 = new Bone().set(leftJaw2, leftJaw3, this, "face");
-    this.bLeftJaw3LeftJaw4 = new Bone().set(leftJaw3, leftJaw4, this, "face");
-    this.bLeftJaw4LeftJaw5 = new Bone().set(leftJaw4, leftJaw5, this, "face");
-    this.bLeftJaw5LeftJaw6 = new Bone().set(leftJaw5, leftJaw6, this, "face");
-    this.bLeftJaw6LeftJaw7 = new Bone().set(leftJaw6, leftJaw7, this, "face");
-    this.bLeftJaw7JawMid = new Bone().set(leftJaw7, jawMid, this, "face");
-    this.bRightTop0RightTop1 = new Bone().set(
-      rightTop0,
-      rightTop1,
-      this,
-      "face"
-    );
-    this.bRightTop1RightJaw2 = new Bone().set(
-      rightTop1,
-      rightJaw2,
-      this,
-      "face"
-    );
-    this.bRightJaw2RightJaw3 = new Bone().set(
-      rightJaw2,
-      rightJaw3,
-      this,
-      "face"
-    );
-    this.bRightJaw3RightJaw4 = new Bone().set(
-      rightJaw3,
-      rightJaw4,
-      this,
-      "face"
-    );
-    this.bRightJaw4RightJaw5 = new Bone().set(
-      rightJaw4,
-      rightJaw5,
-      this,
-      "face"
-    );
-    this.bRightJaw5RightJaw6 = new Bone().set(
-      rightJaw5,
-      rightJaw6,
-      this,
-      "face"
-    );
-    this.bRightJaw6RightJaw7 = new Bone().set(
-      rightJaw6,
-      rightJaw7,
-      this,
-      "face"
-    );
-    this.bRightJaw7JawMid = new Bone().set(rightJaw7, jawMid, this, "face");
-    this.bLeftEye0LeftEye1 = new Bone().set(leftEye0, leftEye1, this, "face");
-    this.bLeftEye1LeftEye2 = new Bone().set(leftEye1, leftEye2, this, "face");
-    this.bLeftEye2LeftEye3 = new Bone().set(leftEye2, leftEye3, this, "face");
-    this.bLeftEye3LeftEye4 = new Bone().set(leftEye3, leftEye4, this, "face");
-    this.bLeftEye4LeftEye5 = new Bone().set(leftEye4, leftEye5, this, "face");
-    this.bLeftEye5LeftEye0 = new Bone().set(leftEye5, leftEye0, this, "face");
-    this.bRightEye0RightEye1 = new Bone().set(
-      rightEye0,
-      rightEye1,
-      this,
-      "face"
-    );
-    this.bRightEye1RightEye2 = new Bone().set(
-      rightEye1,
-      rightEye2,
-      this,
-      "face"
-    );
-    this.bRightEye2RightEye3 = new Bone().set(
-      rightEye2,
-      rightEye3,
-      this,
-      "face"
-    );
-    this.bRightEye3RightEye4 = new Bone().set(
-      rightEye3,
-      rightEye4,
-      this,
-      "face"
-    );
-    this.bRightEye4RightEye5 = new Bone().set(
-      rightEye4,
-      rightEye5,
-      this,
-      "face"
-    );
-    this.bRightEye5RightEye0 = new Bone().set(
-      rightEye5,
-      rightEye0,
-      this,
-      "face"
-    );
-    this.bLeftBrow0LeftBrow1 = new Bone().set(
-      leftBrow0,
-      leftBrow1,
-      this,
-      "face"
-    );
-    this.bLeftBrow1LeftBrow2 = new Bone().set(
-      leftBrow1,
-      leftBrow2,
-      this,
-      "face"
-    );
-    this.bLeftBrow2LeftBrow3 = new Bone().set(
-      leftBrow2,
-      leftBrow3,
-      this,
-      "face"
-    );
-    this.bLeftBrow3LeftBrow4 = new Bone().set(
-      leftBrow3,
-      leftBrow4,
-      this,
-      "face"
-    );
-    this.bRightBrow0RightBrow1 = new Bone().set(
-      rightBrow0,
-      rightBrow1,
-      this,
-      "face"
-    );
-    this.bRightBrow1RightBrow2 = new Bone().set(
-      rightBrow1,
-      rightBrow2,
-      this,
-      "face"
-    );
-    this.bRightBrow2RightBrow3 = new Bone().set(
-      rightBrow2,
-      rightBrow3,
-      this,
-      "face"
-    );
-    this.bRightBrow3RightBrow4 = new Bone().set(
-      rightBrow3,
-      rightBrow4,
-      this,
-      "face"
-    );
-    this.bNose0Nose1 = new Bone().set(nose0, nose1, this, "face");
-    this.bNose1Nose2 = new Bone().set(nose1, nose2, this, "face");
-    this.bNose2Nose3 = new Bone().set(nose2, nose3, this, "face");
-    this.bNose3Nose4 = new Bone().set(nose3, nose4, this, "face");
-    this.bLeftNose0LeftNose1 = new Bone().set(
-      leftNose0,
-      leftNose1,
-      this,
-      "face"
-    );
-    this.bLeftNose1Nose4 = new Bone().set(leftNose1, nose4, this, "face");
-    this.bRightNose0RightNose1 = new Bone().set(
-      rightNose0,
-      rightNose1,
-      this,
-      "face"
-    );
-    this.bRightNose1Nose4 = new Bone().set(rightNose1, nose4, this, "face");
-    this.bLeftMouthCornerLeftUpperLipTop0 = new Bone().set(
+    let bTopMidRightTop0 = new Bone(topMid, rightTop0, this, "face");
+    let bTopMidLeftTop0 = new Bone(topMid, leftTop0, this, "face");
+    let bLeftTop0LeftTop1 = new Bone(leftTop0, leftTop1, this, "face");
+    let bLeftTop1LeftJaw2 = new Bone(leftTop1, leftJaw2, this, "face");
+    let bLeftJaw2LeftJaw3 = new Bone(leftJaw2, leftJaw3, this, "face");
+    let bLeftJaw3LeftJaw4 = new Bone(leftJaw3, leftJaw4, this, "face");
+    let bLeftJaw4LeftJaw5 = new Bone(leftJaw4, leftJaw5, this, "face");
+    let bLeftJaw5LeftJaw6 = new Bone(leftJaw5, leftJaw6, this, "face");
+    let bLeftJaw6LeftJaw7 = new Bone(leftJaw6, leftJaw7, this, "face");
+    let bLeftJaw7JawMid = new Bone(leftJaw7, jawMid, this, "face");
+    let bRightTop0RightTop1 = new Bone(rightTop0, rightTop1, this, "face");
+    let bRightTop1RightJaw2 = new Bone(rightTop1, rightJaw2, this, "face");
+    let bRightJaw2RightJaw3 = new Bone(rightJaw2, rightJaw3, this, "face");
+    let bRightJaw3RightJaw4 = new Bone(rightJaw3, rightJaw4, this, "face");
+    let bRightJaw4RightJaw5 = new Bone(rightJaw4, rightJaw5, this, "face");
+    let bRightJaw5RightJaw6 = new Bone(rightJaw5, rightJaw6, this, "face");
+    let bRightJaw6RightJaw7 = new Bone(rightJaw6, rightJaw7, this, "face");
+    let bRightJaw7JawMid = new Bone(rightJaw7, jawMid, this, "face");
+    let bLeftEye0LeftEye1 = new Bone(leftEye0, leftEye1, this, "face");
+    let bLeftEye1LeftEye2 = new Bone(leftEye1, leftEye2, this, "face");
+    let bLeftEye2LeftEye3 = new Bone(leftEye2, leftEye3, this, "face");
+    let bLeftEye3LeftEye4 = new Bone(leftEye3, leftEye4, this, "face");
+    let bLeftEye4LeftEye5 = new Bone(leftEye4, leftEye5, this, "face");
+    let bLeftEye5LeftEye0 = new Bone(leftEye5, leftEye0, this, "face");
+    let bRightEye0RightEye1 = new Bone(rightEye0, rightEye1, this, "face");
+    let bRightEye1RightEye2 = new Bone(rightEye1, rightEye2, this, "face");
+    let bRightEye2RightEye3 = new Bone(rightEye2, rightEye3, this, "face");
+    let bRightEye3RightEye4 = new Bone(rightEye3, rightEye4, this, "face");
+    let bRightEye4RightEye5 = new Bone(rightEye4, rightEye5, this, "face");
+    let bRightEye5RightEye0 = new Bone(rightEye5, rightEye0, this, "face");
+    let bLeftBrow0LeftBrow1 = new Bone(leftBrow0, leftBrow1, this, "face");
+    let bLeftBrow1LeftBrow2 = new Bone(leftBrow1, leftBrow2, this, "face");
+    let bLeftBrow2LeftBrow3 = new Bone(leftBrow2, leftBrow3, this, "face");
+    let bLeftBrow3LeftBrow4 = new Bone(leftBrow3, leftBrow4, this, "face");
+    let bRightBrow0RightBrow1 = new Bone(rightBrow0, rightBrow1, this, "face");
+    let bRightBrow1RightBrow2 = new Bone(rightBrow1, rightBrow2, this, "face");
+    let bRightBrow2RightBrow3 = new Bone(rightBrow2, rightBrow3, this, "face");
+    let bRightBrow3RightBrow4 = new Bone(rightBrow3, rightBrow4, this, "face");
+    let bNose0Nose1 = new Bone(nose0, nose1, this, "face");
+    let bNose1Nose2 = new Bone(nose1, nose2, this, "face");
+    let bNose2Nose3 = new Bone(nose2, nose3, this, "face");
+    let bNose3Nose4 = new Bone(nose3, nose4, this, "face");
+    let bLeftNose0LeftNose1 = new Bone(leftNose0, leftNose1, this, "face");
+    let bLeftNose1Nose4 = new Bone(leftNose1, nose4, this, "face");
+    let bRightNose0RightNose1 = new Bone(rightNose0, rightNose1, this, "face");
+    let bRightNose1Nose4 = new Bone(rightNose1, nose4, this, "face");
+    let bLeftMouthCornerLeftUpperLipTop0 = new Bone(
       leftMouthCorner,
       leftUpperLipTop0,
       this,
       "face"
     );
-    this.bLeftUpperLipTop0LeftUpperLipTop1 = new Bone().set(
+    let bLeftUpperLipTop0LeftUpperLipTop1 = new Bone(
       leftUpperLipTop0,
       leftUpperLipTop1,
       this,
       "face"
     );
-    this.bLeftUpperLipTop1UpperLipTopMid = new Bone().set(
+    let bLeftUpperLipTop1UpperLipTopMid = new Bone(
       leftUpperLipTop1,
       upperLipTopMid,
       this,
       "face"
     );
-    this.bRigthMouthCornerRigthUpperLipTop0 = new Bone().set(
+    let bRigthMouthCornerRigthUpperLipTop0 = new Bone(
       rightMouthCorner,
       rightUpperLipTop0,
       this,
       "face"
     );
-    this.bRigthUpperLipTop0RigthUpperLipTop1 = new Bone().set(
+    let bRigthUpperLipTop0RigthUpperLipTop1 = new Bone(
       rightUpperLipTop0,
       rightUpperLipTop1,
       this,
       "face"
     );
-    this.bRigthUpperLipTop1UpperLipTopMid = new Bone().set(
+    let bRigthUpperLipTop1UpperLipTopMid = new Bone(
       rightUpperLipTop1,
       upperLipTopMid,
       this,
       "face"
     );
-    this.bLeftMouthCornerLeftMiddleLip = new Bone().set(
+    let bLeftMouthCornerLeftMiddleLip = new Bone(
       leftMouthCorner,
       leftMiddleLip,
       this,
       "face"
     );
-    this.bLeftMiddleLipLeftUpperLipBottom1 = new Bone().set(
+    let bLeftMiddleLipLeftUpperLipBottom1 = new Bone(
       leftMiddleLip,
       leftUpperLipBottom1,
       this,
       "face"
     );
-    this.bLeftUpperLipBottom1UpperLipBottomMid = new Bone().set(
+    let bLeftUpperLipBottom1UpperLipBottomMid = new Bone(
       leftUpperLipBottom1,
       upperLipBottomMid,
       this,
       "face"
     );
-    this.bRightMouthCornerRightMiddleLip = new Bone().set(
+    let bRightMouthCornerRightMiddleLip = new Bone(
       rightMouthCorner,
       rightMiddleLip,
       this,
       "face"
     );
-    this.bRightMiddleLipRightUpperLipBottom1 = new Bone().set(
+    let bRightMiddleLipRightUpperLipBottom1 = new Bone(
       rightMiddleLip,
       rightUpperLipBottom1,
       this,
       "face"
     );
-    this.bRightUpperLipBottom1UpperLipBototmMid = new Bone().set(
+    let bRightUpperLipBottom1UpperLipBototmMid = new Bone(
       rightUpperLipBottom1,
       upperLipBottomMid,
       this,
       "face"
     );
-    this.bLeftMiddleLipLeftLowerLipTop0 = new Bone().set(
+    let bLeftMiddleLipLeftLowerLipTop0 = new Bone(
       leftMiddleLip,
       leftLowerLipTop0,
       this,
       "face"
     );
-    this.bLeftLowerLipTop0LowerLipTopMid = new Bone().set(
+    let bLeftLowerLipTop0LowerLipTopMid = new Bone(
       leftLowerLipTop0,
       lowerLipTopMid,
       this,
       "face"
     );
-    this.bRightMiddleLipRightLowerLipTop0 = new Bone().set(
+    let bRightMiddleLipRightLowerLipTop0 = new Bone(
       rightMiddleLip,
       rightLowerLipTop0,
       this,
       "face"
     );
-    this.bRightLowerLipTop0LowerLipTopMid = new Bone().set(
+    let bRightLowerLipTop0LowerLipTopMid = new Bone(
       rightLowerLipTop0,
       lowerLipTopMid,
       this,
       "face"
     );
-    this.bLeftMouthCornerLeftLowerLipBottom0 = new Bone().set(
+    let bLeftMouthCornerLeftLowerLipBottom0 = new Bone(
       leftMouthCorner,
       leftLowerLipBottom0,
       this,
       "face"
     );
-    this.bLeftLowerLipBottom0LeftLowerLipBottom1 = new Bone().set(
+    let bLeftLowerLipBottom0LeftLowerLipBottom1 = new Bone(
       leftLowerLipBottom0,
       leftLowerLipBottom1,
       this,
       "face"
     );
-    this.bLeftLowerLipBottom1LowerLipBottomMid = new Bone().set(
+    let bLeftLowerLipBottom1LowerLipBottomMid = new Bone(
       leftLowerLipBottom1,
       lowerLipBottomMid,
       this,
       "face"
     );
-    this.bRightMouthCornerRightLowerLipBottom0 = new Bone().set(
+    let bRightMouthCornerRightLowerLipBottom0 = new Bone(
       rightMouthCorner,
       rightLowerLipBottom0,
       this,
       "face"
     );
-    this.bRightLowerLipBottom0RightLowerLipBottom1 = new Bone().set(
+    let bRightLowerLipBottom0RightLowerLipBottom1 = new Bone(
       rightLowerLipBottom0,
       rightLowerLipBottom1,
       this,
       "face"
     );
-    this.bRightLowerLipBottom1LowerLipBottomMid = new Bone().set(
+    let bRightLowerLipBottom1LowerLipBottomMid = new Bone(
       rightLowerLipBottom1,
       lowerLipBottomMid,
       this,
@@ -767,89 +714,89 @@ export class Skeleton {
 
     this.faceBones = [
       // Face
-      this.bTopMidRightTop0,
-      this.bRightTop0RightTop1,
-      this.bTopMidLeftTop0,
-      this.bLeftTop0LeftTop1,
-      this.bLeftTop1LeftJaw2,
-      this.bLeftJaw2LeftJaw3,
-      this.bLeftJaw3LeftJaw4,
-      this.bLeftJaw4LeftJaw5,
-      this.bLeftJaw5LeftJaw6,
-      this.bLeftJaw6LeftJaw7,
-      this.bLeftJaw7JawMid,
-      this.bRightTop1RightJaw2,
-      this.bRightJaw2RightJaw3,
-      this.bRightJaw3RightJaw4,
-      this.bRightJaw4RightJaw5,
-      this.bRightJaw5RightJaw6,
-      this.bRightJaw6RightJaw7,
-      this.bRightJaw7JawMid,
-      this.bLeftEye0LeftEye1,
-      this.bLeftEye1LeftEye2,
-      this.bLeftEye2LeftEye3,
-      this.bLeftEye3LeftEye4,
-      this.bLeftEye4LeftEye5,
-      this.bLeftEye5LeftEye0,
-      this.bRightEye0RightEye1,
-      this.bRightEye1RightEye2,
-      this.bRightEye2RightEye3,
-      this.bRightEye3RightEye4,
-      this.bRightEye4RightEye5,
-      this.bRightEye5RightEye0,
-      this.bLeftBrow0LeftBrow1,
-      this.bLeftBrow1LeftBrow2,
-      this.bLeftBrow2LeftBrow3,
-      this.bLeftBrow3LeftBrow4,
-      this.bRightBrow0RightBrow1,
-      this.bRightBrow1RightBrow2,
-      this.bRightBrow2RightBrow3,
-      this.bRightBrow3RightBrow4,
-      this.bNose0Nose1,
-      this.bNose1Nose2,
-      this.bNose2Nose3,
-      this.bNose3Nose4,
-      this.bLeftNose0LeftNose1,
-      this.bLeftNose1Nose4,
-      this.bRightNose0RightNose1,
-      this.bRightNose1Nose4,
-      this.bLeftMouthCornerLeftUpperLipTop0,
-      this.bLeftUpperLipTop0LeftUpperLipTop1,
-      this.bLeftUpperLipTop1UpperLipTopMid,
-      this.bRigthMouthCornerRigthUpperLipTop0,
-      this.bRigthUpperLipTop0RigthUpperLipTop1,
-      this.bRigthUpperLipTop1UpperLipTopMid,
-      this.bLeftMouthCornerLeftMiddleLip,
-      this.bLeftMiddleLipLeftUpperLipBottom1,
-      this.bLeftUpperLipBottom1UpperLipBottomMid,
-      this.bRightMouthCornerRightMiddleLip,
-      this.bRightMiddleLipRightUpperLipBottom1,
-      this.bRightUpperLipBottom1UpperLipBototmMid,
-      this.bLeftMiddleLipLeftLowerLipTop0,
-      this.bLeftLowerLipTop0LowerLipTopMid,
-      this.bRightMiddleLipRightLowerLipTop0,
-      this.bRightLowerLipTop0LowerLipTopMid,
-      this.bLeftMouthCornerLeftLowerLipBottom0,
-      this.bLeftLowerLipBottom0LeftLowerLipBottom1,
-      this.bLeftLowerLipBottom1LowerLipBottomMid,
-      this.bRightMouthCornerRightLowerLipBottom0,
-      this.bRightLowerLipBottom0RightLowerLipBottom1,
-      this.bRightLowerLipBottom1LowerLipBottomMid,
+      bTopMidRightTop0,
+      bRightTop0RightTop1,
+      bTopMidLeftTop0,
+      bLeftTop0LeftTop1,
+      bLeftTop1LeftJaw2,
+      bLeftJaw2LeftJaw3,
+      bLeftJaw3LeftJaw4,
+      bLeftJaw4LeftJaw5,
+      bLeftJaw5LeftJaw6,
+      bLeftJaw6LeftJaw7,
+      bLeftJaw7JawMid,
+      bRightTop1RightJaw2,
+      bRightJaw2RightJaw3,
+      bRightJaw3RightJaw4,
+      bRightJaw4RightJaw5,
+      bRightJaw5RightJaw6,
+      bRightJaw6RightJaw7,
+      bRightJaw7JawMid,
+      bLeftEye0LeftEye1,
+      bLeftEye1LeftEye2,
+      bLeftEye2LeftEye3,
+      bLeftEye3LeftEye4,
+      bLeftEye4LeftEye5,
+      bLeftEye5LeftEye0,
+      bRightEye0RightEye1,
+      bRightEye1RightEye2,
+      bRightEye2RightEye3,
+      bRightEye3RightEye4,
+      bRightEye4RightEye5,
+      bRightEye5RightEye0,
+      bLeftBrow0LeftBrow1,
+      bLeftBrow1LeftBrow2,
+      bLeftBrow2LeftBrow3,
+      bLeftBrow3LeftBrow4,
+      bRightBrow0RightBrow1,
+      bRightBrow1RightBrow2,
+      bRightBrow2RightBrow3,
+      bRightBrow3RightBrow4,
+      bNose0Nose1,
+      bNose1Nose2,
+      bNose2Nose3,
+      bNose3Nose4,
+      bLeftNose0LeftNose1,
+      bLeftNose1Nose4,
+      bRightNose0RightNose1,
+      bRightNose1Nose4,
+      bLeftMouthCornerLeftUpperLipTop0,
+      bLeftUpperLipTop0LeftUpperLipTop1,
+      bLeftUpperLipTop1UpperLipTopMid,
+      bRigthMouthCornerRigthUpperLipTop0,
+      bRigthUpperLipTop0RigthUpperLipTop1,
+      bRigthUpperLipTop1UpperLipTopMid,
+      bLeftMouthCornerLeftMiddleLip,
+      bLeftMiddleLipLeftUpperLipBottom1,
+      bLeftUpperLipBottom1UpperLipBottomMid,
+      bRightMouthCornerRightMiddleLip,
+      bRightMiddleLipRightUpperLipBottom1,
+      bRightUpperLipBottom1UpperLipBototmMid,
+      bLeftMiddleLipLeftLowerLipTop0,
+      bLeftLowerLipTop0LowerLipTopMid,
+      bRightMiddleLipRightLowerLipTop0,
+      bRightLowerLipTop0LowerLipTopMid,
+      bLeftMouthCornerLeftLowerLipBottom0,
+      bLeftLowerLipBottom0LeftLowerLipBottom1,
+      bLeftLowerLipBottom1LowerLipBottomMid,
+      bRightMouthCornerRightLowerLipBottom0,
+      bRightLowerLipBottom0RightLowerLipBottom1,
+      bRightLowerLipBottom1LowerLipBottomMid,
     ];
     this.bodyBones = [
       // Body
-      this.bLeftShoulderRightShoulder,
-      this.bRightShoulderRightHip,
-      this.bLeftHipRightHip,
-      this.bLeftShoulderLeftHip,
-      this.bLeftShoulderLeftElbow,
-      this.bLeftElbowLeftWrist,
-      this.bRightShoulderRightElbow,
-      this.bRightElbowRightWrist,
-      this.bLeftHipLeftKnee,
-      this.bLeftKneeLeftAnkle,
-      this.bRightHipRightKnee,
-      this.bRightKneeRightAnkle,
+      bLeftShoulderRightShoulder,
+      bRightShoulderRightHip,
+      bLeftHipRightHip,
+      bLeftShoulderLeftHip,
+      bLeftShoulderLeftElbow,
+      bLeftElbowLeftWrist,
+      bRightShoulderRightElbow,
+      bRightElbowRightWrist,
+      bLeftHipLeftKnee,
+      bLeftKneeLeftAnkle,
+      bRightHipRightKnee,
+      bRightKneeRightAnkle,
     ];
     this.bones = this.faceBones.concat(this.bodyBones);
     this.secondaryBones = [];
@@ -859,15 +806,15 @@ export class Skeleton {
 
     this.boneGroups = {
       torso: [
-        this.bLeftShoulderRightShoulder,
-        this.bRightShoulderRightHip,
-        this.bLeftHipRightHip,
-        this.bLeftShoulderLeftHip,
+        bLeftShoulderRightShoulder,
+        bRightShoulderRightHip,
+        bLeftHipRightHip,
+        bLeftShoulderLeftHip,
       ],
-      leftLeg: [this.bLeftHipLeftKnee, this.bLeftKneeLeftAnkle],
-      rightLeg: [this.bRightHipRightKnee, this.bRightKneeRightAnkle],
-      leftArm: [this.bLeftShoulderLeftElbow, this.bLeftElbowLeftWrist],
-      rightArm: [this.bRightElbowRightWrist, this.bRightShoulderRightElbow],
+      leftLeg: [bLeftHipLeftKnee, bLeftKneeLeftAnkle],
+      rightLeg: [bRightHipRightKnee, bRightKneeRightAnkle],
+      leftArm: [bLeftShoulderLeftElbow, bLeftElbowLeftWrist],
+      rightArm: [bRightElbowRightWrist, bRightShoulderRightElbow],
       face: this.faceBones,
     };
 
@@ -875,15 +822,17 @@ export class Skeleton {
       let parts = [bone.kp0, bone.kp1];
       parts.forEach((part) => {
         part.baseTransFunc = MathUtils.getTransformFunc(
-          this.bLeftJaw2LeftJaw3.kp0.position,
-          this.bRightJaw2RightJaw3.kp0.position,
+          bLeftJaw2LeftJaw3.kp0.position,
+          bRightJaw2RightJaw3.kp0.position,
           part.position
         );
       });
     });
+
+    this.bNose3Nose4 = bNose3Nose4;
   }
 
-  update(pose, face) {
+  update(pose: Pose, face: FaceFrame) {
     if (pose.score < MIN_POSE_SCORE) {
       this.isValid = false;
       return;
@@ -910,14 +859,14 @@ export class Skeleton {
     let nosePos = this.bNose3Nose4.kp1.currentPosition;
     this.secondaryBones.forEach((bone) => {
       bone.kp0.currentPosition = bone.kp0.transformFunc(
-        bone.parent.kp0.currentPosition,
+        bone.parent?.kp0.currentPosition,
         nosePos
       );
       bone.kp1.currentPosition = bone.kp1.transformFunc(
-        bone.parent.kp1.currentPosition,
+        bone.parent?.kp1.currentPosition,
         nosePos
       );
-      bone.score = bone.parent.score;
+      bone.score = bone.parent?.score;
       bone.latestCenter = bone.kp1.currentPosition
         .add(bone.kp0.currentPosition)
         .divide(2);
@@ -930,11 +879,17 @@ export class Skeleton {
     this.isValid = true;
   }
 
-  updatePoseParts(pose) {
+  updatePoseParts(pose: Pose) {
     posePartNames.forEach((partName) => {
       // Use new and old pose's confidence scores as weights to compute the new part position.
       let part1 = getPartFromPose(pose, partName);
       let part0 = this.parts[partName] || part1;
+
+      if (!(part0 && part1)) {
+        console.log("An updatePoseParts subfunction was missing parts");
+        return false;
+      }
+
       let weight0 = part0.score / (part1.score + part0.score);
       let weight1 = part1.score / (part1.score + part0.score);
       let pos = part0.position
@@ -951,7 +906,7 @@ export class Skeleton {
     return true;
   }
 
-  updateFaceParts(face) {
+  updateFaceParts(face: FaceFrame) {
     let posLeftEar = this.parts["leftEar"].position;
     let posRightEar = this.parts["rightEar"].position;
     if (
@@ -995,8 +950,11 @@ export class Skeleton {
       this.faceBones.forEach((bone) => {
         let parts = [bone.kp0, bone.kp1];
         parts.forEach((part) => {
+          let position = part.baseTransFunc
+            ? part.baseTransFunc(fLeftEar, fRightEar)
+            : part.currentPosition;
           this.parts[part.name] = {
-            position: part.baseTransFunc(fLeftEar, fRightEar),
+            position,
             score: 1,
           };
         });
@@ -1005,8 +963,8 @@ export class Skeleton {
     return true;
   }
 
-  findBoneGroup(point) {
-    let minDistances = {};
+  findBoneGroup(point: paper.Point): Bone[] {
+    let minDistances: { [boneKey: string]: number } = {};
     Object.keys(this.boneGroups).forEach((boneGroupKey) => {
       let minDistance = Infinity;
       let boneGroup = this.boneGroups[boneGroupKey];
@@ -1021,7 +979,7 @@ export class Skeleton {
       minDistances[boneGroupKey] = minDistance;
     });
     let minDistance = Math.min(...Object.values(minDistances));
-    let selectedGroups = [];
+    let selectedGroups: Bone[][] = [];
     Object.keys(minDistances).forEach((key) => {
       let distance = minDistances[key];
       if (distance <= minDistance) {
@@ -1031,7 +989,7 @@ export class Skeleton {
     return selectedGroups.flat();
   }
 
-  getTotalBoneLength(bones) {
+  getTotalBoneLength(bones: Bone[]): number {
     let totalLen = 0;
     bones.forEach((bone) => {
       let d = (bone.kp0.currentPosition || bone.kp0.position).subtract(
@@ -1042,7 +1000,7 @@ export class Skeleton {
     return totalLen;
   }
 
-  debugDraw(scope) {
+  debugDraw(scope: paper.PaperScope) {
     let group = new scope.Group();
     scope.project.activeLayer.addChild(group);
     this.bones.forEach((bone) => {
@@ -1063,11 +1021,11 @@ export class Skeleton {
     // });
   }
 
-  debugDrawLabels(scope) {
+  debugDrawLabels(scope: paper.PaperScope) {
     let group = new scope.Group();
     scope.project.activeLayer.addChild(group);
     this.bones.forEach((bone) => {
-      let addLabel = (kp, name) => {
+      let addLabel = (kp: BonePoint, name: string) => {
         let text = new scope.PointText({
           point: [kp.currentPosition.x, kp.currentPosition.y],
           content: name,
@@ -1081,22 +1039,18 @@ export class Skeleton {
     });
   }
 
-  reset() {
-    this.parts = [];
-  }
-
-  static getCurrentPosition(segment) {
-    let position = new paper.Point();
+  static getCurrentPosition(segment: Skinning) {
+    let position = new paper.Point(0, 0); // 0s not necessary, TS definitions error
     Object.keys(segment.skinning).forEach((boneName) => {
       let bt = segment.skinning[boneName];
       position = position.add(
-        bt.bone.transform(bt.transform).multiply(bt.weight)
+        (bt.bone.transform(bt.transform) as any).multiply(bt.weight)
       );
     });
     return position;
   }
 
-  static flipPose(pose) {
+  static flipPose(pose: Pose) {
     pose.keypoints.forEach((kp) => {
       if (kp.part && kp.part.startsWith("left")) {
         kp.part = "right" + kp.part.substring("left".length, kp.part.length);
@@ -1106,25 +1060,32 @@ export class Skeleton {
     });
   }
 
-  static flipFace(face) {
+  static flipFace(face: AnnotatedPrediction) {
     Object.keys(facePartName2Index).forEach((partName) => {
       if (partName.startsWith("left")) {
         let rightName =
           "right" + partName.substr("left".length, partName.length);
+
+        //@ts-ignore
         let temp = face.scaledMesh[facePartName2Index[partName]];
+
+        //@ts-ignore
         face.scaledMesh[facePartName2Index[partName]] =
+          //@ts-ignore
           face.scaledMesh[facePartName2Index[rightName]];
+
+        //@ts-ignore
         face.scaledMesh[facePartName2Index[rightName]] = temp;
       }
     });
   }
 
-  static getBoundingBox(pose) {
+  static getBoundingBox(pose: PoseIllustration) {
     let minX = 100000;
     let maxX = -100000;
     let minY = 100000;
     let maxY = -100000;
-    let updateMinMax = (x, y) => {
+    let updateMinMax = (x: number, y: number) => {
       minX = Math.min(x, minX);
       maxX = Math.max(x, maxX);
       minY = Math.min(y, minY);
@@ -1142,7 +1103,7 @@ export class Skeleton {
     return [minX, maxX, minY, maxY];
   }
 
-  static translatePose(pose, d) {
+  static translatePose(pose: PoseIllustration, d: { x: number; y: number }) {
     pose.frames.forEach((frame) => {
       frame.pose.keypoints.forEach((kp) => {
         kp.position.x += d.x;
@@ -1156,9 +1117,13 @@ export class Skeleton {
     });
   }
 
-  static resizePose(pose, origin, scale) {
+  static resizePose(
+    pose: PoseIllustration,
+    origin: paper.Point,
+    scale: { x: number; y: number }
+  ) {
     pose.frames.forEach((frame) => {
-      frame.pose.keypoints.forEach((kp) => {
+      frame.pose.keypoints.forEach((kp: BonePoint) => {
         kp.position.x = origin.x + (kp.position.x - origin.x) * scale.x;
         kp.position.y = origin.y + (kp.position.y - origin.y) * scale.y;
       });
@@ -1171,14 +1136,16 @@ export class Skeleton {
     });
   }
 
-  static toFaceFrame(faceDetection) {
-    let frame = {
+  static toFaceFrame(faceDetection: AnnotatedPrediction): FaceFrame {
+    let frame: FaceFrame = {
       positions: [],
       faceInViewConfidence: faceDetection.faceInViewConfidence,
     };
     for (let i = 0; i < facePartNames.length; i++) {
       let partName = facePartNames[i];
-      let p = faceDetection.scaledMesh[facePartName2Index[partName]];
+
+      let p = (faceDetection.scaledMesh as any)[facePartName2Index[partName]];
+
       frame.positions.push(p[0]);
       frame.positions.push(p[1]);
     }
