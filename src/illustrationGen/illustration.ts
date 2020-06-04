@@ -153,13 +153,6 @@ export class PoseIllustration {
     let scope = this.scope;
     // Add paths
     this.skinnedPaths.forEach((skinnedPath) => {
-      // Do not render paths with low confidence scores.
-      if (
-        !skinnedPath.confidenceScore ||
-        skinnedPath.confidenceScore < MIN_CONFIDENCE_PATH_SCORE
-      ) {
-        return;
-      }
       let path = new scope.Path({
         fillColor: skinnedPath.fillColor,
         strokeColor: skinnedPath.strokeColor,

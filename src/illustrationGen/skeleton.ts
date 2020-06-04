@@ -41,15 +41,13 @@ export interface FaceFrame {
 const MIN_POSE_SCORE = 0.1;
 const MIN_FACE_SCORE = 0.8;
 
+const legPartNames = ["leftKnee", "leftAnkle", "rightKnee", "rightAnkle"];
+
 const posePartNames = [
-  "leftAnkle",
-  "leftKnee",
   "leftHip",
   "leftWrist",
   "leftElbow",
   "leftShoulder",
-  "rightAnkle",
-  "rightKnee",
   "rightHip",
   "rightWrist",
   "rightElbow",
@@ -211,7 +209,7 @@ const facePartNames = [
   "rightLowerLipTop0", // 65 - 67
 ];
 
-export const allPartNames = posePartNames.concat(facePartNames);
+export const allPartNames = posePartNames.concat(facePartNames, legPartNames);
 
 export interface BonePoint {
   baseTransFunc?: Function;
@@ -900,6 +898,37 @@ export class Skeleton {
         score: part0.score * weight0 + part1.score * weight1,
       };
     });
+
+    let leftHip = this.parts["leftHip"];
+    let rightHip = this.parts["rightHip"];
+
+    let kneeDistance = 100;
+    let ankleDistance = 100;
+
+    this.parts["leftKnee"] = {
+      position: leftHip.position.clone().add(new paper.Point(0, kneeDistance)),
+      score: leftHip.score,
+    };
+
+    this.parts["leftAnkle"] = {
+      position: leftHip.position
+        .clone()
+        .add(new paper.Point(0, kneeDistance + ankleDistance)),
+      score: leftHip.score,
+    };
+
+    this.parts["rightKnee"] = {
+      position: rightHip.position.clone().add(new paper.Point(0, kneeDistance)),
+      score: rightHip.score,
+    };
+
+    this.parts["rightAnkle"] = {
+      position: rightHip.position
+        .clone()
+        .add(new paper.Point(0, kneeDistance + ankleDistance)),
+      score: rightHip.score,
+    };
+
     if (!this.parts["rightEar"] || !this.parts["leftEar"]) {
       return false;
     }
