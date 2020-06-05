@@ -57,7 +57,10 @@ export function drawSkeleton(
   } else {
     console.log("WARNING: No face detected");
   }
-  illustration.draw();
+  const group = illustration.draw();
+
+  group.position = new paper.Point(50, 80);
+  paper.project.activeLayer.addChild(group);
 }
 
 const detectAndDrawPose = (

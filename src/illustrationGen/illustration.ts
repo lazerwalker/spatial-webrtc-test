@@ -146,13 +146,13 @@ export class PoseIllustration {
     });
   }
 
-  draw() {
+  draw(): paper.Group {
     if (!this.skeleton.isValid) {
       return;
     }
     let scope = this.scope;
     // Add paths
-    this.skinnedPaths.forEach((skinnedPath) => {
+    let paths = this.skinnedPaths.map((skinnedPath) => {
       let path = new scope.Path({
         fillColor: skinnedPath.fillColor,
         strokeColor: skinnedPath.strokeColor,
@@ -173,8 +173,17 @@ export class PoseIllustration {
       if (skinnedPath.closed) {
         path.closePath();
       }
-      scope.project.activeLayer.addChild(path);
+
+      return path;
     });
+
+    const group = new scope.Group(paths);
+
+    // TODO:  Do the scaling intentionally to reach a target bounding box width, given the model can vary in size
+
+    group.scale(0.2);
+
+    return group;
   }
 
   debugDraw() {
