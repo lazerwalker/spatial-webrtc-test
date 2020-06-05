@@ -14,6 +14,9 @@ interface SkeletonData {
   face?: facemesh.AnnotatedPrediction;
 }
 
+let currentPosition: paper.Point = new paper.Point(600, 600);
+let destination: paper.Point | undefined;
+
 type SkeletonDataHandler = (skeleton: SkeletonData) => void;
 
 // ML models
@@ -59,7 +62,17 @@ export function drawSkeleton(
   }
   const group = illustration.draw();
 
-  group.position = new paper.Point(50, 80);
+  // TODO: This should either have a nicer curve and/or be based on time rather than static speed
+  const speed = 40;
+  if (destination && currentPosition.getDistance(destination) > speed) {
+    const vector = destination
+      .subtract(currentPosition)
+      .normalize()
+      .multiply(speed);
+    currentPosition = currentPosition.add(vector);
+  }
+
+  group.position = currentPosition;
   paper.project.activeLayer.addChild(group);
 }
 
@@ -94,6 +107,15 @@ function setupCanvas(output: HTMLCanvasElement) {
   output.height = canvasHeight;
 
   paper.setup(output);
+
+  var tool = new paper.Tool();
+  tool.onMouseDown = (e) => {
+    destination = e.point;
+  };
+
+  tool.onMouseDrag = (e) => {
+    destination = e.point;
+  };
 }
 
 const setVideoHeight = async (el: HTMLVideoElement): Promise<number> => {
