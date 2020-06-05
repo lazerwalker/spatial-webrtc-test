@@ -116,6 +116,11 @@ function setupCanvas(output: HTMLCanvasElement) {
   tool.onMouseDrag = (e) => {
     destination = e.point;
   };
+
+  const bg = new paper.Raster("hills");
+  bg.scale(10);
+  bg.position = new paper.Point(500, 500);
+  paper.project.activeLayer.addChild(bg);
 }
 
 const setVideoHeight = async (el: HTMLVideoElement): Promise<number> => {

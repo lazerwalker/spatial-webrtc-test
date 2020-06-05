@@ -17,16 +17,33 @@
     #wrapper {
       position: relative;
     }
+
+    #hill {
+      position: absolute;
+      left: 0;
+      top: 0;
+      width: 800px;
+      height: 500px;
+    }
+
+    #illustration {
+      position: absolute; 
+      top: 0;
+    }
+
+    #webcam { display: none }
+    
   </style>
 </head>
+<body>
 <button id="connect">Data Connect!</button>
 <button id="call">Call!</button>
 <div id="wrapper">
   <canvas id="overlay"></canvas>
+  <img src="images/hills.jpg" id='hill' />
   <video id="webcam"></video>
   <canvas id="illustration"></video>  
 </div>
-
-<body></body>
+</body>
 
 </html>

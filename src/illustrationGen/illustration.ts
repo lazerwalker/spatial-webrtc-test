@@ -181,7 +181,7 @@ export class PoseIllustration {
 
     // TODO:  Do the scaling intentionally to reach a target bounding box width, given the model can vary in size
 
-    group.scale(0.2);
+    group.scale(0.3);
 
     return group;
   }
