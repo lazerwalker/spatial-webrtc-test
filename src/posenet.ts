@@ -14,8 +14,12 @@ interface SkeletonData {
   face?: facemesh.AnnotatedPrediction;
 }
 
-let currentPosition: paper.Point = new paper.Point(600, 600);
-let destination: paper.Point | undefined;
+interface SkeletonDrawData {
+  skeleton: SkeletonData;
+  illustration: PoseIllustration;
+  position: paper.Point;
+  destination: paper.Point | undefined;
+}
 
 type SkeletonDataHandler = (skeleton: SkeletonData) => void;
 
@@ -42,10 +46,9 @@ const getSkeleton = async (input: HTMLVideoElement): Promise<SkeletonData> => {
   };
 };
 
-export function drawSkeleton(
-  skeleton: SkeletonData,
-  illustration: PoseIllustration
-) {
+export function drawSkeleton(skeletonData: SkeletonDrawData) {
+  const { skeleton, illustration, position, destination } = skeletonData;
+
   paper.project.clear();
 
   if (!skeleton.pose) {
@@ -64,21 +67,18 @@ export function drawSkeleton(
 
   // TODO: This should either have a nicer curve and/or be based on time rather than static speed
   const speed = 40;
-  if (destination && currentPosition.getDistance(destination) > speed) {
-    const vector = destination
-      .subtract(currentPosition)
-      .normalize()
-      .multiply(speed);
-    currentPosition = currentPosition.add(vector);
+  if (destination && position.getDistance(destination) > speed) {
+    const vector = destination.subtract(position).normalize().multiply(speed);
+    skeletonData.position = position.add(vector);
   }
 
-  group.position = currentPosition;
+  group.position = position;
   paper.project.activeLayer.addChild(group);
 }
 
 const detectAndDrawPose = (
   inputVideo: HTMLVideoElement,
-  illustration: PoseIllustration,
+  skeletonData: SkeletonDrawData,
   onSkeletonUpdate?: SkeletonDataHandler
 ) => {
   async function poseDetectionFrame() {
@@ -87,14 +87,19 @@ const detectAndDrawPose = (
       onSkeletonUpdate(skeleton);
     }
 
-    drawSkeleton(skeleton, illustration);
+    skeletonData.skeleton = skeleton;
+
+    drawSkeleton(skeletonData);
     requestAnimationFrame(poseDetectionFrame);
   }
 
   poseDetectionFrame();
 };
 
-function setupCanvas(output: HTMLCanvasElement) {
+function setupCanvas(
+  output: HTMLCanvasElement,
+  playerSkeleton: Partial<SkeletonDrawData>
+) {
   let canvasWidth = 800;
   let canvasHeight = 800;
 
@@ -110,11 +115,11 @@ function setupCanvas(output: HTMLCanvasElement) {
 
   var tool = new paper.Tool();
   tool.onMouseDown = (e) => {
-    destination = e.point;
+    playerSkeleton.destination = e.point;
   };
 
   tool.onMouseDrag = (e) => {
-    destination = e.point;
+    playerSkeleton.destination = e.point;
   };
 
   const bg = new paper.Raster("hills");
@@ -159,7 +164,9 @@ export async function setUpPosenet({
 }) {
   const inputVideo = input;
 
-  setupCanvas(output);
+  let playerSkeleton: Partial<SkeletonDrawData> = {};
+
+  setupCanvas(output, playerSkeleton);
 
   console.log("Loading PoseNet model...");
   posenetNet = await posenet.load({
@@ -175,5 +182,8 @@ export async function setUpPosenet({
   const illustration = await parseSVG("girl");
   await setVideoHeight(inputVideo);
 
-  detectAndDrawPose(inputVideo, illustration, onSkeletonUpdate);
+  playerSkeleton.position = new paper.Point(600, 600);
+  playerSkeleton.illustration = illustration;
+
+  detectAndDrawPose(inputVideo, playerSkeleton, onSkeletonUpdate);
 }
