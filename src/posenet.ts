@@ -14,14 +14,16 @@ interface SkeletonData {
   face?: facemesh.AnnotatedPrediction;
 }
 
-interface SkeletonDrawData {
-  skeleton: SkeletonData;
+// TODO: This is really two different data types: one that must have a SkeletonData obj, and one that never does
+// For now, conflating them is... fine.
+export interface SkeletonDrawData {
+  skeleton?: SkeletonData;
   illustration: PoseIllustration;
   position: paper.Point;
-  destination: paper.Point | undefined;
+  destination?: paper.Point;
 }
 
-type SkeletonDataHandler = (skeleton: SkeletonData) => void;
+type SkeletonDataHandler = (skeleton: SkeletonDrawData) => void;
 
 // ML models
 let facemeshNet: facemesh.FaceMesh;
@@ -48,8 +50,6 @@ const getSkeleton = async (input: HTMLVideoElement): Promise<SkeletonData> => {
 
 export function drawSkeleton(skeletonData: SkeletonDrawData) {
   const { skeleton, illustration, position, destination } = skeletonData;
-
-  paper.project.clear();
 
   if (!skeleton.pose) {
     return;
@@ -83,12 +83,13 @@ const detectAndDrawPose = (
 ) => {
   async function poseDetectionFrame() {
     const skeleton = await getSkeleton(inputVideo);
-    if (onSkeletonUpdate) {
-      onSkeletonUpdate(skeleton);
-    }
-
     skeletonData.skeleton = skeleton;
 
+    if (onSkeletonUpdate) {
+      onSkeletonUpdate({ ...skeletonData });
+    }
+
+    paper.project.clear();
     drawSkeleton(skeletonData);
     requestAnimationFrame(poseDetectionFrame);
   }
@@ -164,10 +165,6 @@ export async function setUpPosenet({
 }) {
   const inputVideo = input;
 
-  let playerSkeleton: Partial<SkeletonDrawData> = {};
-
-  setupCanvas(output, playerSkeleton);
-
   console.log("Loading PoseNet model...");
   posenetNet = await posenet.load({
     architecture: "MobileNetV1",
@@ -182,8 +179,12 @@ export async function setUpPosenet({
   const illustration = await parseSVG("girl");
   await setVideoHeight(inputVideo);
 
-  playerSkeleton.position = new paper.Point(600, 600);
-  playerSkeleton.illustration = illustration;
+  const playerSkeleton = {
+    position: new paper.Point(600, 600),
+    illustration: illustration,
+  };
+
+  setupCanvas(output, playerSkeleton);
 
   detectAndDrawPose(inputVideo, playerSkeleton, onSkeletonUpdate);
 }

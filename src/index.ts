@@ -1,7 +1,13 @@
 import Peer from "peerjs";
 import * as SignalR from "@aspnet/signalr";
-import { drawSkeleton, setUpPosenet, parseSVG } from "./posenet";
+import {
+  drawSkeleton,
+  setUpPosenet,
+  parseSVG,
+  SkeletonDrawData,
+} from "./posenet";
 import { PoseIllustration } from "./illustrationGen/illustration";
+import paper from "paper";
 
 let peer: Peer;
 let mediaStream: MediaStream | undefined;
@@ -31,8 +37,9 @@ const getMediaStream = async (): Promise<MediaStream | undefined> => {
       setUpPosenet({
         input: video,
         output: document.querySelector("#illustration"),
-        onSkeletonUpdate: (skeleton) => {
-          const json = JSON.stringify(skeleton);
+        onSkeletonUpdate: (drawData) => {
+          delete drawData.illustration;
+          const json = JSON.stringify(drawData);
           dataConnections.forEach((c) => c.send(json));
         },
       });
@@ -57,9 +64,25 @@ const connectionOpened = (conn: Peer.DataConnection) => {
   });
 
   conn.on("data", (data) => {
-    const skeleton = JSON.parse(data);
-    console.log("Reeived data", skeleton);
-    drawSkeleton(skeleton, peerCanvases[conn.peer]);
+    const skeleton: SkeletonDrawData = JSON.parse(data);
+    console.log("Received data", skeleton);
+
+    // By default, paper.Point objects get serialized as arrays of [TypeString, X, Y]
+    if (skeleton.position) {
+      skeleton.position = new paper.Point(
+        skeleton.position[1],
+        skeleton.position[2]
+      );
+    }
+    if (skeleton.destination) {
+      skeleton.destination = new paper.Point(
+        skeleton.destination[1],
+        skeleton.destination[2]
+      );
+    }
+
+    skeleton.illustration = peerCanvases[conn.peer];
+    drawSkeleton(skeleton);
   });
 };
 
@@ -85,9 +108,9 @@ const connectToPeer = async (peerId: string) => {
   const dataConn = peer.connect(peerId);
   connectionOpened(dataConn);
 
-  // const mediaStream = await getMediaStream();
-  // const callConn = peer.call(peerId, mediaStream);
-  // callOpened(callConn);
+  const mediaStream = await getMediaStream();
+  const callConn = peer.call(peerId, mediaStream);
+  callOpened(callConn);
 };
 
 const connectSignalR = () => {
@@ -162,17 +185,4 @@ window.addEventListener("DOMContentLoaded", () => {
   getMediaStream();
   peer = new Peer();
   setUpPeer(peer);
-
-  document.getElementById("connect").addEventListener("click", () => {
-    const otherId = prompt("What's the peer ID?");
-    const conn = peer.connect(otherId);
-    connectionOpened(conn);
-  });
-
-  document.getElementById("call").addEventListener("click", async () => {
-    const otherId = prompt("What's the peer ID?");
-    const mediaStream = await getMediaStream();
-    const conn = peer.call(otherId, mediaStream);
-    callOpened(conn);
-  });
 });
