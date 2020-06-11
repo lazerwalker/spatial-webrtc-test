@@ -24,6 +24,9 @@ export interface SkeletonDrawData {
 }
 
 type SkeletonDataHandler = (skeleton: SkeletonDrawData) => void;
+type AvatarPeerMap = { [peerId: string]: SkeletonDrawData };
+
+const peerMap: AvatarPeerMap = {};
 
 // ML models
 let facemeshNet: facemesh.FaceMesh;
@@ -51,7 +54,7 @@ const getSkeleton = async (input: HTMLVideoElement): Promise<SkeletonData> => {
 export function drawSkeleton(skeletonData: SkeletonDrawData) {
   const { skeleton, illustration, position, destination } = skeletonData;
 
-  if (!skeleton.pose) {
+  if (!skeleton || !skeleton.pose) {
     return;
   }
 
@@ -91,6 +94,7 @@ const detectAndDrawPose = (
 
     paper.project.clear();
     drawSkeleton(skeletonData);
+    Object.values(peerMap).forEach((s) => drawSkeleton(s));
     requestAnimationFrame(poseDetectionFrame);
   }
 
@@ -180,11 +184,24 @@ export async function setUpPosenet({
   await setVideoHeight(inputVideo);
 
   const playerSkeleton = {
-    position: new paper.Point(600, 600),
+    position: new paper.Point(100, 400),
     illustration: illustration,
   };
 
   setupCanvas(output, playerSkeleton);
 
   detectAndDrawPose(inputVideo, playerSkeleton, onSkeletonUpdate);
+  console.log("Finished setting up posenet");
+}
+
+export async function addPeer(peerId: string) {
+  const illustration = await parseSVG("boy");
+  peerMap[peerId] = {
+    illustration,
+    position: new paper.Point(0, 0),
+  };
+}
+
+export function updatePeer(peerId: string, data: Partial<SkeletonDrawData>) {
+  peerMap[peerId] = { ...peerMap[peerId], ...data };
 }

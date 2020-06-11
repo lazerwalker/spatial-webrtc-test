@@ -1,19 +1,18 @@
 import Peer from "peerjs";
 import * as SignalR from "@aspnet/signalr";
 import {
-  drawSkeleton,
   setUpPosenet,
-  parseSVG,
   SkeletonDrawData,
+  AvatarPeerMap,
+  updatePeer,
+  addPeer,
 } from "./posenet";
-import { PoseIllustration } from "./illustrationGen/illustration";
 import paper from "paper";
 
 let peer: Peer;
 let mediaStream: MediaStream | undefined;
 
 let dataConnections: Peer.DataConnection[] = [];
-let peerCanvases: { [peerId: string]: PoseIllustration } = {};
 
 const getMediaStream = async (): Promise<MediaStream | undefined> => {
   console.log("Getting media stream");
@@ -31,10 +30,10 @@ const getMediaStream = async (): Promise<MediaStream | undefined> => {
 
     const video: HTMLVideoElement = document.querySelector("#webcam");
     video.srcObject = stream;
-    video.onloadedmetadata = (e) => {
+    video.onloadedmetadata = async (e) => {
       video.play();
 
-      setUpPosenet({
+      await setUpPosenet({
         input: video,
         output: document.querySelector("#illustration"),
         onSkeletonUpdate: (drawData) => {
@@ -43,6 +42,8 @@ const getMediaStream = async (): Promise<MediaStream | undefined> => {
           dataConnections.forEach((c) => c.send(json));
         },
       });
+
+      setUpPeer();
     };
   } catch (err) {
     console.log("Video error", err);
@@ -59,30 +60,32 @@ const connectionOpened = (conn: Peer.DataConnection) => {
 
   conn.on("open", async () => {
     console.log(`connected to ${conn.peer}`);
-    const illustration = await parseSVG("boy");
-    peerCanvases[conn.peer] = illustration;
+    addPeer(conn.peer);
   });
 
   conn.on("data", (data) => {
-    const skeleton: SkeletonDrawData = JSON.parse(data);
-    console.log("Received data", skeleton);
+    const newData: SkeletonDrawData = JSON.parse(data);
+    const skeletonDiff: Partial<SkeletonDrawData> = {};
+
+    console.log("Received data", newData);
+
+    skeletonDiff.skeleton = newData.skeleton;
 
     // By default, paper.Point objects get serialized as arrays of [TypeString, X, Y]
-    if (skeleton.position) {
-      skeleton.position = new paper.Point(
-        skeleton.position[1],
-        skeleton.position[2]
+    if (newData.position) {
+      skeletonDiff.position = new paper.Point(
+        newData.position[1],
+        newData.position[2]
       );
     }
-    if (skeleton.destination) {
-      skeleton.destination = new paper.Point(
-        skeleton.destination[1],
-        skeleton.destination[2]
+    if (newData.destination) {
+      skeletonDiff.destination = new paper.Point(
+        newData.destination[1],
+        newData.destination[2]
       );
     }
 
-    skeleton.illustration = peerCanvases[conn.peer];
-    drawSkeleton(skeleton);
+    updatePeer(conn.peer, skeletonDiff);
   });
 };
 
@@ -153,7 +156,12 @@ const connectSignalR = () => {
     .catch(console.error);
 };
 
-const setUpPeer = (peer: Peer) => {
+const setUpPeer = () => {
+  peer = new Peer(undefined, {
+    host: "52.146.59.124",
+    port: 9000,
+    path: "/myapp",
+  });
   console.log("Peer loaded!");
   peer.on("open", (id) => {
     console.log("Peer opened");
@@ -183,6 +191,4 @@ const setUpPeer = (peer: Peer) => {
 };
 window.addEventListener("DOMContentLoaded", () => {
   getMediaStream();
-  peer = new Peer();
-  setUpPeer(peer);
 });
