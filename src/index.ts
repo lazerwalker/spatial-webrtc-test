@@ -1,12 +1,6 @@
 import Peer from "peerjs";
 import * as SignalR from "@aspnet/signalr";
-import {
-  setUpPosenet,
-  SkeletonDrawData,
-  AvatarPeerMap,
-  updatePeer,
-  addPeer,
-} from "./posenet";
+import { setUpPosenet, SkeletonDrawData, updatePeer, addPeer } from "./posenet";
 import paper from "paper";
 
 let peer: Peer;
