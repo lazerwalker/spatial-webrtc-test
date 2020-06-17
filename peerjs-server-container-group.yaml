@@ -1,0 +1,37 @@
+# az container create --resource-group <myResourceGroup> --file peerjs-server-container-group.yaml
+apiVersion: 2018-10-01
+location: eastus
+name: peerjs-server-group
+properties:
+  containers:
+    - name: peerjs-server
+      properties:
+        image: peerjs/peerjs-server
+        resources:
+          requests:
+            cpu: 1
+            memoryInGb: 1
+        ports:
+          - port: 9000
+          - port: 80
+    - name: caddy
+      properties:
+        image: caddy:latest
+        command: ["caddy reverse-proxy --to localhost:80"]
+        resources:
+          requests:
+            cpu: 1
+            memoryInGb: 1
+        ports:
+          - port: 443
+
+  osType: Linux
+  ipAddress:
+    type: Public
+    ports:
+      - protocol: tcp
+        port: 80
+      - protocol: tcp
+        port: 443
+tags: null
+type: Microsoft.ContainerInstance/containerGroups
