@@ -155,6 +155,7 @@ const setUpPeer = () => {
     host: "52.146.59.124",
     port: 9000,
     path: "/myapp",
+    secure: false,
   });
   console.log("Peer loaded!");
   peer.on("open", (id) => {
