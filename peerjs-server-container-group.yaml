@@ -17,13 +17,18 @@ properties:
     - name: caddy
       properties:
         image: caddy:latest
-        command: ["caddy reverse-proxy --to localhost:80"]
+        command: ["caddy", "reverse-proxy", "--to", "localhost:9000"]
         resources:
           requests:
             cpu: 1
             memoryInGb: 1
         ports:
           - port: 443
+        volumeMounts:
+          - name: "data"
+            mountPath: "/data"
+          - name: "config"
+            mountPath: "/config"
 
   osType: Linux
   ipAddress:
@@ -33,5 +38,11 @@ properties:
         port: 80
       - protocol: tcp
         port: 443
+  volumes:
+    - name: "data"
+      emptyDir: {}
+    - name: "config"
+      emptyDir: {}
+
 tags: null
 type: Microsoft.ContainerInstance/containerGroups

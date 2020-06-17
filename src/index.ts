@@ -153,7 +153,7 @@ const connectSignalR = () => {
 const setUpPeer = () => {
   peer = new Peer(undefined, {
     host: "52.186.43.38",
-    port: 9000,
+    port: 443,
     path: "/myapp",
   });
   console.log("Peer loaded!");
