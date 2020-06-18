@@ -152,7 +152,7 @@ const connectSignalR = () => {
 
 const setUpPeer = () => {
   peer = new Peer(undefined, {
-    host: "52.186.43.38",
+    host: "lazerwalker-peerjs-server.eastus.azurecontainer.io",
     port: 443,
     path: "/myapp",
   });

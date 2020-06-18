@@ -7,22 +7,40 @@ properties:
     - name: peerjs-server
       properties:
         image: peerjs/peerjs-server
+        command:
+          [
+            "node",
+            "bin/peerjs",
+            "--port",
+            "9000",
+            "--path",
+            "/myapp",
+            "--proxied",
+          ]
         resources:
           requests:
             cpu: 1
             memoryInGb: 1
         ports:
           - port: 9000
-          - port: 80
     - name: caddy
       properties:
         image: caddy:latest
-        command: ["caddy", "reverse-proxy", "--to", "localhost:9000"]
+        command:
+          [
+            "caddy",
+            "reverse-proxy",
+            "--from",
+            "lazerwalker-peerjs-server.eastus.azurecontainer.io",
+            "--to",
+            "localhost:9000",
+          ]
         resources:
           requests:
             cpu: 1
             memoryInGb: 1
         ports:
+          - port: 80
           - port: 443
         volumeMounts:
           - name: "data"
@@ -31,6 +49,7 @@ properties:
             mountPath: "/config"
 
   osType: Linux
+  restartPolicy: always
   ipAddress:
     type: Public
     ports:
@@ -38,6 +57,9 @@ properties:
         port: 80
       - protocol: tcp
         port: 443
+      - protocol: tcp
+        port: 9000
+    dnsNameLabel: lazerwalker-peerjs-server
   volumes:
     - name: "data"
       emptyDir: {}
