@@ -4,15 +4,21 @@ const httpTrigger: AzureFunction = async function (
   context: Context,
   req: HttpRequest
 ): Promise<any> {
-  context.log("In broadcastPeerId");
-  const userId = req.body && req.body.peerId;
+  context.log("In sendSignalData");
+  const peerId = req.body && req.body.peerId;
+  const senderPeerId = req.body && req.body.senderPeerId;
+  const data = req.body && req.body.data;
 
-  if (!userId) {
+  if (!peerId) {
     context.res = { status: 403, body: "Pass in a peerId!" };
     return;
   }
 
-  context.log("Username?", userId);
+  if (!data) {
+    context.res = { status: 403, body: "Pass in signal data!" };
+  }
+
+  context.log("Peer Id?", peerId);
 
   context.res = {
     status: 200,
@@ -20,19 +26,13 @@ const httpTrigger: AzureFunction = async function (
 
   console.log("Setting group actions");
 
-  context.bindings.signalRGroupActions = {
-    userId,
-    groupName: "peers",
-    action: "add",
-  };
-
   console.log("Setting messages");
 
   context.bindings.signalRMessages = [
     {
-      groupName: "peers",
-      target: "peerConnected",
-      arguments: [userId],
+      userId: peerId,
+      target: "signal",
+      arguments: [JSON.stringify({ data, peerId: senderPeerId })],
     },
   ];
 };

@@ -54,7 +54,12 @@ const getSkeleton = async (input: HTMLVideoElement): Promise<SkeletonData> => {
 export function drawSkeleton(skeletonData: SkeletonDrawData) {
   const { skeleton, illustration, position, destination } = skeletonData;
 
-  if (!skeleton || !skeleton.pose) {
+  if (!skeleton || !skeleton.pose || !illustration) {
+    console.log(
+      "Missing one of skeleton, skeleton.pose, or illustration",
+      skeleton,
+      illustration
+    );
     return;
   }
 
@@ -202,6 +207,13 @@ export async function addPeer(peerId: string) {
   };
 }
 
-export function updatePeer(peerId: string, data: Partial<SkeletonDrawData>) {
+export async function updatePeer(
+  peerId: string,
+  data: Partial<SkeletonDrawData>
+) {
+  if (!peerMap[peerId]) {
+    await addPeer(peerId);
+  }
+
   peerMap[peerId] = { ...peerMap[peerId], ...data };
 }
